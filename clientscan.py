@@ -45,6 +45,7 @@ def set_monitor_mode(interface):
 
 # Function to perform a quick scan to detect available SSIDs and channels
 def passive_scan_for_ssids(interface):
+    global sniffing
     active_channels = set()
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Scanning for active SSIDs...")
 
@@ -75,6 +76,7 @@ def passive_scan_for_ssids(interface):
 
 # Function to switch WiFi channels for main scan
 def hop_channel(interface, channels):
+    global sniffing
     for channel in channels:
         if not sniffing:
             break
@@ -84,6 +86,7 @@ def hop_channel(interface, channels):
 
 # Function to handle packet processing and track clients
 def packet_handler(packet):
+    global sniffing
     if not sniffing:
         return  # Stop processing if sniffing flag is set to False
     if packet.type == 1:  # Ignore Control frames
@@ -138,7 +141,7 @@ def main():
     parser.add_argument('--debug', action='store_true', help='Enable debug output')
     args = parser.parse_args()
 
-    global debug_mode
+    global debug_mode, sniffing
     debug_mode = args.debug
 
     interface = args.interface
@@ -158,6 +161,7 @@ def main():
 
     # Start sniffing packets in a separate thread
     def sniff_packets():
+        global sniffing
         while sniffing:
             sniff(iface=interface, prn=packet_handler, timeout=1, store=0)
     
