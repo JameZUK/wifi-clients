@@ -20,8 +20,46 @@ sniffing = True
 
 # Function to handle packet processing
 def packet_handler(packet):
-    # (Same as before)
-    # [Omitted for brevity; use the same packet_handler function from the previous script]
+    # Check for Beacon and Probe Response frames (to get SSIDs)
+    if packet.haslayer(Dot11Beacon) or packet.haslayer(Dot11ProbeResp):
+        ssid = packet[Dot11Elt].info.decode('utf-8', errors='ignore')
+        bssid = packet[Dot11].addr2
+        # Signal strength
+        signal = packet.dBm_AntSignal if hasattr(packet, 'dBm_AntSignal') else 'N/A'
+        bssid_ssid_map[bssid] = ssid
+        bssid_signal_strength[bssid] = signal
+
+    # Check for Data frames to find clients associated with APs
+    if packet.haslayer(Dot11):
+        if packet.type == 2 and packet.subtype == 0:  # Data frames
+            addr1 = packet.addr1  # Receiver MAC
+            addr2 = packet.addr2  # Transmitter MAC
+            addr3 = packet.addr3  # BSSID
+
+            # ToDS and FromDS bits
+            to_ds = packet.FCfield & 0x1 != 0
+            from_ds = packet.FCfield & 0x2 != 0
+
+            if to_ds and not from_ds:
+                # Data frame from station to AP
+                client_mac = addr2
+                bssid = addr1
+            elif from_ds and not to_ds:
+                # Data frame from AP to station
+                client_mac = addr1
+                bssid = addr2
+            elif not from_ds and not to_ds:
+                # Data frame between stations in the same BSS
+                client_mac = addr2
+                bssid = addr3
+            else:
+                # WDS frame or other
+                return
+
+            # Map client to SSID using BSSID
+            ssid = bssid_ssid_map.get(bssid)
+            if ssid:
+                network_clients[ssid].add(client_mac)
 
 # Function to stop sniffing
 def stop_sniffing(signum, frame):
