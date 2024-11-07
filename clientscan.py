@@ -20,20 +20,20 @@ ssid_channels = defaultdict(set)  # Track channels for each SSID
 # Global variables to control scanning and debugging
 sniffing = True
 debug_mode = False
-available_channels = []
+selected_channels = [1, 6, 11, 13]  # Reduced set for testing stability
 channel_lock = threading.Lock()  # Lock to coordinate channel switching
 interface = None  # Global variable to hold interface name
 
 # Function to retrieve supported channels from the WiFi interface
 def get_supported_channels(interface):
-    global available_channels
+    global selected_channels
     try:
         # Run iwlist to get channel information
         iwlist_output = subprocess.check_output(['iwlist', interface, 'channel'], text=True)
         # Find all channel numbers in the iwlist output
         available_channels = re.findall(r'Channel (\d+)', iwlist_output)
         available_channels = list(map(int, available_channels))  # Convert to integers
-        print(f"Supported channels for {interface}: {available_channels}")
+        print(f"Available channels for {interface}: {available_channels}")
     except subprocess.CalledProcessError:
         print(f"Failed to retrieve channels for interface {interface}. Ensure it's in monitor mode.")
         sys.exit(1)
@@ -51,17 +51,17 @@ def passive_scan_for_ssids(interface):
     active_channels = set()
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Scanning for active SSIDs...")
 
-    for channel in available_channels:
+    for channel in selected_channels:
         if not sniffing:
             break  # Stop scanning if sniffing flag is set to False
 
         # Switch to the channel, with lock to prevent socket errors during sniffing
         with channel_lock:
             subprocess.call(['iwconfig', interface, 'channel', str(channel)])
-        time.sleep(1)  # Ensure stability before resuming sniffing
+        time.sleep(2)  # Ensure stability before resuming sniffing
 
         # Capture packets to detect SSIDs
-        packets = sniff(iface=interface, timeout=1, count=50, store=True)
+        packets = sniff(iface=interface, timeout=2, count=50, store=True)
         for packet in packets:
             if packet.haslayer(Dot11Beacon) or packet.haslayer(Dot11ProbeResp):
                 ssid = packet[Dot11Elt].info.decode('utf-8', errors='ignore')
@@ -91,7 +91,7 @@ def hop_channel(interface, channels):
         with channel_lock:
             subprocess.call(['iwconfig', interface, 'channel', str(channel)])
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Scanning on Channel {channel}")
-        time.sleep(2)  # Increased dwell time for stability
+        time.sleep(5)  # Longer dwell time per channel for stability
 
 # Function to handle packet processing and track clients
 def packet_handler(packet):
@@ -147,9 +147,13 @@ def display_results():
 def sniff_packets():
     global sniffing
     while sniffing:
-        # Acquire channel lock to prevent errors during sniffing
-        with channel_lock:
-            sniff(iface=interface, prn=packet_handler, timeout=1, store=0)
+        # Retry logic for socket failures
+        try:
+            with channel_lock:
+                sniff(iface=interface, prn=packet_handler, timeout=5, store=0)
+        except Exception as e:
+            print(f"Socket error: {e}. Retrying in 5 seconds...")
+            time.sleep(5)  # Pause briefly before retrying
 
 def main():
     parser = argparse.ArgumentParser(description="WiFi Scanner to count clients per SSID.")
@@ -171,9 +175,6 @@ def main():
     # Set interface to monitor mode
     set_monitor_mode(interface)
 
-    # Get supported channels from the interface
-    get_supported_channels(interface)
-
     # Register signal handler for Ctrl+C
     signal.signal(signal.SIGINT, stop_sniffing)
 
@@ -191,18 +192,5 @@ def main():
                 active_channels = passive_scan_for_ssids(interface)
                 last_scan_time = current_time
             if not active_channels:
-                active_channels = available_channels  # Fallback to all channels if none detected
+                active_channels = selected_channels  # Fallback to pre-selected channels if none detected
             hop_channel(interface, active_channels)
-            display_results()
-            time.sleep(interval)
-    except KeyboardInterrupt:
-        print("\nKeyboardInterrupt received. Exiting gracefully...")
-
-    sniffing = False
-    if sniff_thread and sniff_thread.is_alive():
-        sniff_thread.join()
-    print("\nFinal Results:")
-    display_results()
-
-if __name__ == "__main__":
-    main()
