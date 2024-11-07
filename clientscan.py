@@ -11,85 +11,88 @@ import subprocess
 import re
 from datetime import datetime
 
-# Dictionary to store BSSID -> SSID mapping
+# Dictionaries for SSID and client tracking
 bssid_ssid_map = {}
-# Dictionary to store SSID -> set of client MAC addresses
 network_clients = defaultdict(set)
-# Dictionary to store BSSID -> Signal Strength
 bssid_signal_strength = {}
 
-# Global variables to control sniffing and debugging
+# Global variables to control scanning and debugging
 sniffing = True
 debug_mode = False
-channels = []
+available_channels = []
 
-# Function to get supported channels from the interface
+# Function to get supported channels from the interface (initial full scan)
 def get_supported_channels(interface):
-    global channels
+    global available_channels
     try:
-        # Run iwlist to get channel information
         iwlist_output = subprocess.check_output(['iwlist', interface, 'channel'], text=True)
-        # Find all channel numbers in the iwlist output
-        channels = re.findall(r'Channel (\d+)', iwlist_output)
-        channels = list(map(int, channels))  # Convert to integers
+        all_channels = re.findall(r'Channel (\d+)', iwlist_output)
+        available_channels = list(map(int, all_channels))
         if debug_mode:
-            print(f"Supported channels: {channels}")
+            print(f"Supported channels: {available_channels}")
     except subprocess.CalledProcessError:
         print(f"Failed to retrieve channels for interface {interface}. Ensure it's in monitor mode.")
         sys.exit(1)
 
-# Function to switch WiFi channels
-def hop_channel(interface):
+# Function to scan for available SSIDs and identify active channels
+def scan_for_active_channels(interface):
+    active_channels = set()
+    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Scanning for active SSIDs...")
+    for channel in available_channels:
+        # Switch to the channel
+        subprocess.call(['iwconfig', interface, 'channel', str(channel)])
+        time.sleep(0.5)  # Allow time for channel switch
+        # Capture packets briefly to detect SSIDs
+        packets = sniff(iface=interface, timeout=0.5, count=20, store=True)
+        for packet in packets:
+            if packet.haslayer(Dot11Beacon) or packet.haslayer(Dot11ProbeResp):
+                ssid = packet[Dot11Elt].info.decode('utf-8', errors='ignore')
+                bssid = packet[Dot11].addr2
+                if ssid:
+                    active_channels.add(channel)
+                    bssid_ssid_map[bssid] = ssid
+                    bssid_signal_strength[bssid] = packet.dBm_AntSignal if hasattr(packet, 'dBm_AntSignal') else 'N/A'
+                    if debug_mode:
+                        print(f"Found SSID '{ssid}' on channel {channel}")
+    return list(active_channels)
+
+# Function to switch WiFi channels for main scan
+def hop_channel(interface, channels):
     for channel in channels:
-        if not sniffing:  # Stop hopping if sniffing has stopped
+        if not sniffing:
             break
         subprocess.call(['iwconfig', interface, 'channel', str(channel)])
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        print(f"[{timestamp}] Scanning on Channel {channel}")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Scanning on Channel {channel}")
         time.sleep(1)  # Pause on each channel for 1 second
 
 # Function to handle packet processing
 def packet_handler(packet):
-    # Ignore Control frames and focus on Beacon, Probe Response, and Data frames
-    if packet.type == 1:  # Type 1 = Control frame
+    if packet.type == 1:  # Ignore Control frames
         return
 
-    # Check for Beacon and Probe Response frames (to get SSIDs)
+    # Process SSID information from Beacon/Probe Response frames
     if packet.haslayer(Dot11Beacon) or packet.haslayer(Dot11ProbeResp):
         ssid = packet[Dot11Elt].info.decode('utf-8', errors='ignore')
         bssid = packet[Dot11].addr2
-        # Signal strength
         signal = packet.dBm_AntSignal if hasattr(packet, 'dBm_AntSignal') else 'N/A'
         bssid_ssid_map[bssid] = ssid
         bssid_signal_strength[bssid] = signal
 
-    # Check for Data frames to find clients associated with APs
+    # Process Data frames to find clients associated with APs
     if packet.haslayer(Dot11) and packet.type == 2:  # Data frame
-        addr1 = packet.addr1  # Receiver MAC
-        addr2 = packet.addr2  # Transmitter MAC
-        addr3 = packet.addr3  # BSSID
+        addr1, addr2, addr3 = packet.addr1, packet.addr2, packet.addr3
+        to_ds, from_ds = packet.FCfield & 0x1 != 0, packet.FCfield & 0x2 != 0
 
-        # ToDS and FromDS bits
-        to_ds = packet.FCfield & 0x1 != 0
-        from_ds = packet.FCfield & 0x2 != 0
-
+        # Determine direction to map client/AP based on ToDS/FromDS
         if to_ds and not from_ds:
-            # Data frame from station to AP
-            client_mac = addr2
-            bssid = addr1
+            client_mac, bssid = addr2, addr1
         elif from_ds and not to_ds:
-            # Data frame from AP to station
-            client_mac = addr1
-            bssid = addr2
+            client_mac, bssid = addr1, addr2
         elif not from_ds and not to_ds:
-            # Data frame between stations in the same BSS
-            client_mac = addr2
-            bssid = addr3
+            client_mac, bssid = addr2, addr3
         else:
-            # WDS frame or other
             return
 
-        # Map client to SSID using BSSID
         ssid = bssid_ssid_map.get(bssid)
         if ssid:
             network_clients[ssid].add(client_mac)
@@ -121,7 +124,7 @@ def main():
 
     print(f"Starting WiFi scan on interface {interface}. Press Ctrl+C to stop.")
 
-    # Get supported channels from the interface
+    # Get initial supported channels
     get_supported_channels(interface)
 
     # Register signal handler for Ctrl+C
@@ -135,10 +138,13 @@ def main():
     sniff_thread = threading.Thread(target=sniff_packets)
     sniff_thread.start()
 
-    # Channel hopping loop with concise output
+    # Periodically update the list of active channels based on available SSIDs
     while sniffing:
-        hop_channel(interface)
-        display_results()  # Update results periodically
+        active_channels = scan_for_active_channels(interface)
+        if not active_channels:
+            active_channels = available_channels  # Fallback to all channels if none detected
+        hop_channel(interface, active_channels)
+        display_results()
 
     sniff_thread.join()
     print("\nFinal Results:")
