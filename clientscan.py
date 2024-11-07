@@ -43,8 +43,27 @@ def freq_to_channel(freq):
     else:
         return None
 
+# Helper function to get card with retries
+def get_card_with_retries(interface, max_retries=5, sleep_time=0.1):
+    retry_count = 0
+    while retry_count < max_retries:
+        try:
+            card = pyw.getcard(interface)
+            return card  # Successfully obtained the card
+        except pyric.error as e:
+            if e.errno in [errno.ENOBUFS, errno.EAGAIN]:
+                if debug_mode:
+                    print(f"getcard failed with errno {e.errno} ({e.strerror}), retrying after sleep")
+                time.sleep(sleep_time)
+                retry_count += 1
+            else:
+                print(f"Failed to get card for interface {interface}: {e}")
+                return None
+    print(f"Failed to get card for interface {interface} after {max_retries} retries")
+    return None
+
 # Helper function to set channel with retries
-def set_channel_with_retries(iface, channel, max_retries=5, sleep_time=0.01):
+def set_channel_with_retries(iface, channel, max_retries=5, sleep_time=0.1):
     retry_count = 0
     while retry_count < max_retries:
         try:
@@ -74,9 +93,13 @@ def get_supported_channels(interface):
     global selected_channels
     try:
         # Get the wireless interface
-        iface = pyw.getcard(interface)
-        # Get the list of supported channels (as integers)
-        chs = pyw.devchs(iface)  # Returns a list of channel numbers
+        with channel_lock:
+            iface = get_card_with_retries(interface)
+            if iface is None:
+                print(f"Failed to get card for interface {interface}. Exiting.")
+                sys.exit(1)
+            # Get the list of supported channels (as integers)
+            chs = pyw.devchs(iface)  # Returns a list of channel numbers
         selected_channels = []
         for channel in chs:
             freq = channels.ch2rf(channel)  # Get the frequency corresponding to the channel
@@ -104,11 +127,15 @@ def get_supported_channels(interface):
 # Function to initialize interface in monitor mode
 def set_monitor_mode(interface):
     try:
-        iface = pyw.getcard(interface)
-        pyw.down(iface)
-        pyw.modeset(iface, 'monitor')
-        pyw.up(iface)
-        print(f"Interface {interface} set to monitor mode.")
+        with channel_lock:
+            iface = get_card_with_retries(interface)
+            if iface is None:
+                print(f"Failed to get card for interface {interface}. Exiting.")
+                sys.exit(1)
+            pyw.down(iface)
+            pyw.modeset(iface, 'monitor')
+            pyw.up(iface)
+            print(f"Interface {interface} set to monitor mode.")
     except pyric.error as e:
         print(f"Failed to set {interface} to monitor mode: {e}")
         sys.exit(1)
@@ -129,12 +156,16 @@ def passive_scan_for_ssids(interface, sniff_timeout, sniff_count):
         if debug_mode:
             print(f"\nAttempting to scan on Channel {channel}")
 
-        # Switch to the channel, with lock to prevent socket errors during sniffing
+        # Synchronize access to the interface
         with channel_lock:
-            iface = pyw.getcard(interface)
+            iface = get_card_with_retries(interface)
+            if iface is None:
+                continue  # Skip to the next channel if unable to get card
+
             success = set_channel_with_retries(iface, channel)
             if not success:
                 continue  # Skip to next channel
+
             if debug_mode:
                 print(f"Successfully set interface {interface} to Channel {channel}")
 
@@ -210,10 +241,14 @@ def hop_channel(interface, channels, sleep_time):
             break
 
         with channel_lock:
-            iface = pyw.getcard(interface)
+            iface = get_card_with_retries(interface)
+            if iface is None:
+                continue  # Skip to the next channel if unable to get card
+
             success = set_channel_with_retries(iface, channel)
             if not success:
                 continue  # Skip to next channel
+
             if debug_mode:
                 print(f"Set interface {interface} to channel {channel} successfully.")
 
@@ -332,7 +367,7 @@ def main():
     parser.add_argument('--debug', action='store_true', help='Enable debug output')
     parser.add_argument('--sniff_timeout', type=float, default=1.5, help='Timeout in seconds for sniffing packets during passive scan')
     parser.add_argument('--sniff_count', type=int, default=100, help='Number of packets to capture during passive scan')
-    parser.add_argument('--hop_sleep', type=float, default=0.5, help='Sleep time in seconds after hopping to a new channel')
+    parser.add_argument('--hop_sleep', type=float, default=1.0, help='Sleep time in seconds after hopping to a new channel')
     args = parser.parse_args()
 
     global debug_mode, sniffing, interface, selected_channels
