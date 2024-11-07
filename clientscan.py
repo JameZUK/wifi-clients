@@ -140,8 +140,13 @@ def display_results():
     print("\nCurrent Results:")
     for ssid, clients in network_clients.items():
         channels = sorted(ssid_channels[ssid])
-        primary_channel = max(bssid_signal_strength[ssid], key=bssid_signal_strength[ssid].get)  # Channel with strongest signal
-        signal_strength = bssid_signal_strength[ssid][primary_channel]
+        if bssid_signal_strength[ssid]:  # Ensure there is signal strength data
+            primary_channel = max(bssid_signal_strength[ssid], key=bssid_signal_strength[ssid].get)  # Channel with strongest signal
+            signal_strength = bssid_signal_strength[ssid][primary_channel]
+        else:
+            primary_channel = "N/A"
+            signal_strength = "N/A"
+        
         print(f"SSID: {ssid}, Primary Channel: {primary_channel}, Other Channels: {', '.join(map(str, channels))}, Clients: {len(clients)}, Signal: {signal_strength} dBm")
 
 def sniff_packets():
