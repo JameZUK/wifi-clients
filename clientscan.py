@@ -32,7 +32,7 @@ def get_supported_channels(interface):
         # Run iwlist to get channel information
         iwlist_output = subprocess.check_output(['iwlist', interface, 'channel'], text=True)
         # Find all channel numbers in the iwlist output
-        available_channels = re.findall(r'Channel (\d+)', iwlist_output)
+        available_channels = re.findall(r'Channel\s+(\d+)', iwlist_output)
         available_channels = list(map(int, available_channels))  # Convert to integers
         print(f"Available channels for {interface}: {available_channels}")
     except subprocess.CalledProcessError:
@@ -47,7 +47,7 @@ def set_monitor_mode(interface):
     print(f"Interface {interface} set to monitor mode.")
 
 # Function to perform a quick scan to detect available SSIDs and channels
-def passive_scan_for_ssids(interface):
+def passive_scan_for_ssids(interface, sniff_timeout, sniff_count):
     global sniffing
     active_channels = set()
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Scanning for active SSIDs...")
@@ -59,11 +59,11 @@ def passive_scan_for_ssids(interface):
         # Switch to the channel, with lock to prevent socket errors during sniffing
         with channel_lock:
             subprocess.call(['iwconfig', interface, 'channel', str(channel)])
-        time.sleep(2)  # Ensure stability before resuming sniffing
+        time.sleep(1)  # Reduced sleep for faster scanning
 
         # Capture packets to detect SSIDs
         try:
-            packets = sniff(iface=interface, timeout=2, count=50, store=True)
+            packets = sniff(iface=interface, timeout=sniff_timeout, count=sniff_count, store=True)
         except Exception as e:
             if debug_mode:
                 print(f"Error during sniffing on channel {channel}: {e}")
@@ -89,7 +89,7 @@ def passive_scan_for_ssids(interface):
     return list(active_channels)
 
 # Function to switch WiFi channels in main scan
-def hop_channel(interface, channels):
+def hop_channel(interface, channels, sleep_time):
     for channel in channels:
         if not sniffing:
             break
@@ -98,7 +98,7 @@ def hop_channel(interface, channels):
         with channel_lock:
             subprocess.call(['iwconfig', interface, 'channel', str(channel)])
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Scanning on Channel {channel}")
-        time.sleep(5)  # Longer dwell time per channel for stability
+        time.sleep(sleep_time)  # Adjustable sleep time for faster scanning
 
 # Function to handle packet processing and track clients
 def packet_handler(packet):
@@ -156,13 +156,13 @@ def display_results():
         
         print(f"SSID: {ssid}, Primary Channel: {primary_channel}, Other Channels: {', '.join(map(str, channels))}, Clients: {len(clients)}, Signal: {signal_strength} dBm")
 
-def sniff_packets():
+def sniff_packets(sniff_timeout, sniff_count):
     global sniffing
     while sniffing:
         # Retry logic for socket failures
         try:
             with channel_lock:
-                sniff(iface=interface, prn=packet_handler, timeout=5, store=0)
+                sniff(iface=interface, prn=packet_handler, timeout=sniff_timeout, count=sniff_count, store=0)
         except Exception as e:
             if debug_mode:  # Only print the error if debug mode is enabled
                 print(f"Socket error: {e}. Retrying in 5 seconds...")
@@ -174,14 +174,20 @@ def main():
     parser.add_argument('-t', '--interval', type=int, default=5, help='Interval in seconds between output updates')
     parser.add_argument('--scan_interval', type=int, default=30, help='Interval in seconds for rescanning SSIDs')
     parser.add_argument('--debug', action='store_true', help='Enable debug output')
+    parser.add_argument('--sniff_timeout', type=int, default=2, help='Timeout in seconds for sniffing packets during passive scan')
+    parser.add_argument('--sniff_count', type=int, default=50, help='Number of packets to capture during passive scan')
+    parser.add_argument('--hop_sleep', type=int, default=2, help='Sleep time in seconds after hopping to a new channel')
     args = parser.parse_args()
 
-    global debug_mode, sniffing, interface
+    global debug_mode, sniffing, interface, selected_channels
     debug_mode = args.debug
 
     interface = args.interface
     interval = args.interval
     scan_interval = args.scan_interval  # SSID scan interval
+    sniff_timeout = args.sniff_timeout
+    sniff_count = args.sniff_count
+    hop_sleep = args.hop_sleep
 
     # Configure logging to suppress Scapy warnings if debug_mode is off
     if not debug_mode:
@@ -201,7 +207,7 @@ def main():
     signal.signal(signal.SIGINT, stop_sniffing)
 
     # Start the sniffing thread
-    sniff_thread = threading.Thread(target=sniff_packets)
+    sniff_thread = threading.Thread(target=sniff_packets, args=(sniff_timeout, sniff_count))
     sniff_thread.daemon = True
     sniff_thread.start()
 
@@ -211,11 +217,11 @@ def main():
         while sniffing:
             current_time = time.time()
             if current_time - last_scan_time >= scan_interval:
-                active_channels = passive_scan_for_ssids(interface)
+                active_channels = passive_scan_for_ssids(interface, sniff_timeout, sniff_count)
                 last_scan_time = current_time
             if not active_channels:
                 active_channels = selected_channels  # Fallback to pre-selected channels if none detected
-            hop_channel(interface, active_channels)
+            hop_channel(interface, active_channels, hop_sleep)
             display_results()
             time.sleep(interval)
     except KeyboardInterrupt:
