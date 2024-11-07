@@ -31,29 +31,44 @@ def get_supported_channels(interface):
     try:
         # Run iwlist to get channel information
         iwlist_output = subprocess.check_output(['iwlist', interface, 'channel'], text=True)
-        # Extract channel numbers and frequencies
+        
+        # Uncomment the following line to see the raw iwlist output for debugging
+        # print("Raw iwlist output:\n", iwlist_output)
+        
+        # Enhanced regex to capture channel numbers and frequencies
+        # This pattern captures lines like:
+        # Channel 1 : Frequency 2.412 GHz (Channel 1)
+        # Channel 36 : Frequency 5.180 GHz (Channel 36)
         pattern = r'Channel\s+(\d+)\s*:\s*Frequency\s+(\d+\.\d+)\s*GHz'
         channels_freqs = re.findall(pattern, iwlist_output)
-
+        
         if not channels_freqs:
             # Try alternative pattern without colon
-            pattern = r'Channel\s+(\d+)\s*Frequency\s+(\d+\.\d+)\s*GHz'
-            channels_freqs = re.findall(pattern, iwlist_output)
-
+            # e.g., "Channel 1 Frequency 2.412 GHz"
+            pattern_alt = r'Channel\s+(\d+)\s*Frequency\s+(\d+\.\d+)\s*GHz'
+            channels_freqs = re.findall(pattern_alt, iwlist_output)
+        
+        if not channels_freqs:
+            # Another alternative pattern
+            # e.g., "Channel 1    Frequency:2.412 GHz"
+            pattern_alt2 = r'Channel\s+(\d+)\s+Frequency[:=]\s*(\d+\.\d+)\s*GHz'
+            channels_freqs = re.findall(pattern_alt2, iwlist_output)
+        
         if not channels_freqs:
             print("No channels found. Please ensure the interface is correct and supports monitor mode.")
             sys.exit(1)
-
+        
+        # Map channels to their frequency bands
         channel_freq_map = {}
         for ch, freq in channels_freqs:
             channel_freq_map[int(ch)] = float(freq)
-
+        
         # Categorize channels into 2.4 GHz and 5 GHz
         selected_channels = [ch for ch, freq in channel_freq_map.items() if 2.4 <= freq < 3.0 or 5.0 <= freq < 6.0]
-
+        
         # Sort channels for orderly scanning
         selected_channels.sort()
-
+        
         print(f"Available channels for {interface}: {selected_channels}")
     except subprocess.CalledProcessError:
         print(f"Failed to retrieve channels for interface {interface}. Ensure it's in monitor mode.")
@@ -105,7 +120,9 @@ def passive_scan_for_ssids(interface, sniff_timeout, sniff_count):
                     active_channels.add(channel)
                     bssid_ssid_map[bssid] = ssid
                     ssid_channels[ssid].add(channel)  # Track all channels the SSID appears on
-                    bssid_signal_strength[ssid][channel] = max(bssid_signal_strength[ssid][channel], signal)
+                    # Update signal strength only if the new signal is stronger
+                    if signal > bssid_signal_strength[ssid][channel]:
+                        bssid_signal_strength[ssid][channel] = signal
                     if debug_mode:
                         print(f"Found SSID '{ssid}' on channel {channel} with signal {signal} dBm")
     if debug_mode:
@@ -230,6 +247,10 @@ def main():
 
     # Get supported channels (dynamically includes 2.4 GHz and 5 GHz)
     get_supported_channels(interface)
+
+    if not selected_channels:
+        print("No channels detected. Exiting.")
+        sys.exit(1)
 
     # Register signal handler for Ctrl+C
     signal.signal(signal.SIGINT, stop_sniffing)
