@@ -51,9 +51,15 @@ def get_supported_channels(interface):
         # Map frequencies to channels
         for freq in frequencies:
             channel = channels.rf2ch(freq)
+            if debug_mode:
+                print(f"Detected Frequency: {freq} MHz, Channel: {channel}")
             # Include channels in 2.4 GHz and 5 GHz bands
             if channel and (1 <= channel <= 14 or 36 <= channel <= 165):
                 selected_channels.append(channel)
+                if debug_mode:
+                    print(f"Added Channel {channel} to selected_channels")
+            elif debug_mode:
+                print(f"Skipping unsupported or invalid Channel {channel}")
         # Remove duplicates and sort
         selected_channels = sorted(set(selected_channels))
         print(f"Available channels for {interface}: {selected_channels}")
@@ -83,23 +89,28 @@ def passive_scan_for_ssids(interface, sniff_timeout, sniff_count):
         if not sniffing:
             break  # Stop scanning if sniffing flag is set to False
 
+        if debug_mode:
+            print(f"Attempting to scan on Channel {channel}")
+
         # Switch to the channel, with lock to prevent socket errors during sniffing
         with channel_lock:
             try:
                 iface = pyw.getcard(interface)
                 pyw.chset(iface, channel)
-            except pyric.error as e:
                 if debug_mode:
-                    print(f"Failed to set channel {channel} on interface {interface}: {e}")
+                    print(f"Successfully set interface {interface} to Channel {channel}")
+            except pyric.error as e:
+                print(f"Failed to set channel {channel} on interface {interface}: {e}")
                 continue
         time.sleep(0.5)  # Reduced sleep for faster scanning
 
         # Capture packets to detect SSIDs
         try:
             packets = sniff(iface=interface, timeout=sniff_timeout, count=sniff_count, store=True)
-        except Exception as e:
             if debug_mode:
-                print(f"Error during sniffing on channel {channel}: {e}")
+                print(f"Captured {len(packets)} packets on Channel {channel}")
+        except Exception as e:
+            print(f"Error during sniffing on channel {channel}: {e}")
             continue  # Skip to the next channel
 
         for packet in packets:
@@ -112,9 +123,13 @@ def passive_scan_for_ssids(interface, sniff_timeout, sniff_count):
                     signal = radiotap.dBm_AntSignal if hasattr(radiotap, 'dBm_AntSignal') else -100
                     freq = radiotap.ChannelFrequency if hasattr(radiotap, 'ChannelFrequency') else None
                     channel = freq_to_channel(freq) if freq else None
+                    if debug_mode:
+                        print(f"Packet Frequency: {freq}, Mapped Channel: {channel}")
                 else:
                     signal = -100
                     channel = None
+                    if debug_mode:
+                        print("Packet does not have RadioTap layer; cannot extract frequency and signal strength.")
                 if ssid and channel:
                     active_channels.add(channel)
                     bssid_ssid_map[bssid] = ssid
@@ -126,11 +141,13 @@ def passive_scan_for_ssids(interface, sniff_timeout, sniff_count):
                         if debug_mode:
                             print(f"Updated signal strength for SSID '{ssid}' on channel {channel}: {signal} dBm")
                     if debug_mode:
-                        print(f"Found SSID '{ssid}' on channel {channel} with signal {signal} dBm")
+                        print(f"Found SSID '{ssid}' (BSSID: {bssid}) on channel {channel} with signal {signal} dBm")
                 elif debug_mode:
                     print(f"Failed to extract channel information for SSID '{ssid}'")
+        if debug_mode:
+            print(f"Active channels detected so far: {sorted(active_channels)}")
     if debug_mode:
-        print(f"Active channels detected: {active_channels}")
+        print(f"Total active channels detected: {sorted(active_channels)}")
     return list(active_channels)
 
 # Function to switch WiFi channels in main scan
@@ -139,14 +156,14 @@ def hop_channel(interface, channels, sleep_time):
         if not sniffing:
             break
 
-        # Switch to the next channel with lock to prevent socket errors during sniffing
         with channel_lock:
             try:
                 iface = pyw.getcard(interface)
                 pyw.chset(iface, channel)
-            except pyric.error as e:
                 if debug_mode:
-                    print(f"Failed to set channel {channel} on interface {interface}: {e}")
+                    print(f"Set interface {interface} to channel {channel} successfully.")
+            except pyric.error as e:
+                print(f"Failed to set channel {channel} on interface {interface}: {e}")
                 continue
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Scanning on Channel {channel}")
         time.sleep(sleep_time)  # Adjustable sleep time for faster scanning
@@ -155,8 +172,14 @@ def hop_channel(interface, channels, sleep_time):
 def packet_handler(packet):
     if not sniffing:
         return  # Stop processing if sniffing flag is set to False
+
     if packet.type == 1:  # Ignore Control frames
+        if debug_mode:
+            print("Ignoring Control frame.")
         return
+
+    if debug_mode:
+        print(f"Processing packet of type {packet.type} and subtype {packet.subtype}")
 
     # Process SSID information from Beacon/Probe Response frames
     if packet.haslayer(Dot11Beacon) or packet.haslayer(Dot11ProbeResp):
@@ -168,9 +191,13 @@ def packet_handler(packet):
             signal = radiotap.dBm_AntSignal if hasattr(radiotap, 'dBm_AntSignal') else -100
             freq = radiotap.ChannelFrequency if hasattr(radiotap, 'ChannelFrequency') else None
             channel = freq_to_channel(freq) if freq else None
+            if debug_mode:
+                print(f"Packet Frequency: {freq}, Mapped Channel: {channel}")
         else:
             signal = -100
             channel = None
+            if debug_mode:
+                print("Packet does not have RadioTap layer; cannot extract frequency and signal strength.")
         bssid_ssid_map[bssid] = ssid
         ssid_bssids[ssid].add(bssid)  # Track BSSID (AP) per SSID
         if channel:
@@ -182,6 +209,8 @@ def packet_handler(packet):
                     print(f"Updated signal strength for SSID '{ssid}' on channel {channel}: {signal} dBm")
         elif debug_mode:
             print(f"Failed to extract channel information for SSID '{ssid}'")
+        if debug_mode:
+            print(f"Processed Beacon/Probe Response for SSID '{ssid}' (BSSID: {bssid})")
 
     # Process Data frames to find clients associated with APs
     if packet.haslayer(Dot11) and packet.type == 2:  # Data frame
@@ -196,11 +225,17 @@ def packet_handler(packet):
         elif not from_ds and not to_ds:
             client_mac, bssid = addr2, addr3
         else:
+            if debug_mode:
+                print("Packet has both ToDS and FromDS bits set; ignoring.")
             return
 
         ssid = bssid_ssid_map.get(bssid)
         if ssid:
             network_clients[ssid].add(client_mac)
+            if debug_mode:
+                print(f"Associated Client {client_mac} with SSID '{ssid}'")
+        elif debug_mode:
+            print(f"BSSID {bssid} not found in bssid_ssid_map; cannot associate client.")
 
 # Function to stop sniffing
 def stop_sniffing(signum, frame):
@@ -233,8 +268,7 @@ def sniff_packets(sniff_timeout, sniff_count):
             with channel_lock:
                 sniff(iface=interface, prn=packet_handler, timeout=sniff_timeout, count=sniff_count, store=0)
         except Exception as e:
-            if debug_mode:  # Only print the error if debug mode is enabled
-                print(f"Socket error: {e}. Retrying in 5 seconds...")
+            print(f"Socket error: {e}. Retrying in 5 seconds...")
             time.sleep(5)
 
 def main():
@@ -296,6 +330,8 @@ def main():
                 last_scan_time = current_time
             if not active_channels:
                 active_channels = selected_channels.copy()  # Fallback to pre-selected channels if none detected
+            if debug_mode:
+                print(f"Active channels to scan: {active_channels}")
             hop_channel(interface, active_channels, hop_sleep)
             display_results()
             time.sleep(interval)
