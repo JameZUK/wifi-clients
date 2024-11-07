@@ -26,6 +26,19 @@ selected_channels = []  # To be populated dynamically
 channel_lock = threading.Lock()  # Lock to coordinate channel switching
 interface = None  # Global variable to hold interface name
 
+# Function to convert frequency to channel number
+def freq_to_channel(freq):
+    # 2.4 GHz band
+    if 2412 <= freq <= 2472:
+        return (freq - 2407) // 5
+    elif freq == 2484:
+        return 14
+    # 5 GHz band
+    elif 5000 <= freq <= 6000:
+        return (freq - 5000) // 5
+    else:
+        return None
+
 # Corrected function to retrieve supported channels using PyRIC
 def get_supported_channels(interface):
     global selected_channels
@@ -46,8 +59,6 @@ def get_supported_channels(interface):
     except pyric.error as e:
         print(f"Failed to retrieve channels for interface {interface}: {e}")
         sys.exit(1)
-
-# Rest of the code remains the same...
 
 # Function to initialize interface in monitor mode
 def set_monitor_mode(interface):
@@ -92,30 +103,33 @@ def passive_scan_for_ssids(interface, sniff_timeout, sniff_count):
 
         for packet in packets:
             if packet.haslayer(Dot11Beacon) or packet.haslayer(Dot11ProbeResp):
-                ssid = packet[Dot11Elt].info.decode('utf-8', errors='ignore')
-                # Replace empty SSID with <HIDDEN>
-                if not ssid:
-                    ssid = "<HIDDEN>"
+                ssid = packet[Dot11Elt].info.decode('utf-8', errors='ignore') or "<HIDDEN>"
                 bssid = packet[Dot11].addr2
-                # Extract signal strength from Radiotap header if available
-                if hasattr(packet, 'dBm_AntSignal'):
-                    signal = packet.dBm_AntSignal
+                # Extract signal strength and channel
+                if packet.haslayer(RadioTap):
+                    radiotap = packet[RadioTap]
+                    signal = radiotap.dBm_AntSignal if hasattr(radiotap, 'dBm_AntSignal') else -100
+                    freq = radiotap.ChannelFrequency if hasattr(radiotap, 'ChannelFrequency') else None
+                    channel = freq_to_channel(freq) if freq else None
                 else:
-                    signal = -100  # Default low if not detected
-                if ssid:
+                    signal = -100
+                    channel = None
+                if ssid and channel:
                     active_channels.add(channel)
                     bssid_ssid_map[bssid] = ssid
-                    ssid_channels[ssid].add(channel)  # Track all channels the SSID appears on
+                    ssid_channels[ssid].add(channel)
                     # Update signal strength only if the new signal is stronger
-                    if signal > bssid_signal_strength[ssid][channel]:
+                    if signal > bssid_signal_strength[ssid].get(channel, -100):
                         bssid_signal_strength[ssid][channel] = signal
+                        if debug_mode:
+                            print(f"Updated signal strength for SSID '{ssid}' on channel {channel}: {signal} dBm")
                     if debug_mode:
                         print(f"Found SSID '{ssid}' on channel {channel} with signal {signal} dBm")
+                elif debug_mode:
+                    print(f"Failed to extract channel information for SSID '{ssid}'")
     if debug_mode:
         print(f"Active channels detected: {active_channels}")
     return list(active_channels)
-
-# The rest of the functions remain the same...
 
 # Function to switch WiFi channels in main scan
 def hop_channel(interface, channels, sleep_time):
@@ -144,18 +158,27 @@ def packet_handler(packet):
 
     # Process SSID information from Beacon/Probe Response frames
     if packet.haslayer(Dot11Beacon) or packet.haslayer(Dot11ProbeResp):
-        ssid = packet[Dot11Elt].info.decode('utf-8', errors='ignore')
-        # Replace empty SSID with <HIDDEN>
-        if not ssid:
-            ssid = "<HIDDEN>"
+        ssid = packet[Dot11Elt].info.decode('utf-8', errors='ignore') or "<HIDDEN>"
         bssid = packet[Dot11].addr2
-        # Extract signal strength from Radiotap header if available
-        if hasattr(packet, 'dBm_AntSignal'):
-            signal = packet.dBm_AntSignal
+        # Extract signal strength and channel
+        if packet.haslayer(RadioTap):
+            radiotap = packet[RadioTap]
+            signal = radiotap.dBm_AntSignal if hasattr(radiotap, 'dBm_AntSignal') else -100
+            freq = radiotap.ChannelFrequency if hasattr(radiotap, 'ChannelFrequency') else None
+            channel = freq_to_channel(freq) if freq else None
         else:
-            signal = -100  # Default low if not detected
+            signal = -100
+            channel = None
         bssid_ssid_map[bssid] = ssid
-        bssid_signal_strength[ssid][packet[Dot11].Channel] = signal
+        if channel:
+            ssid_channels[ssid].add(channel)
+            # Update signal strength only if the new signal is stronger
+            if signal > bssid_signal_strength[ssid].get(channel, -100):
+                bssid_signal_strength[ssid][channel] = signal
+                if debug_mode:
+                    print(f"Updated signal strength for SSID '{ssid}' on channel {channel}: {signal} dBm")
+        elif debug_mode:
+            print(f"Failed to extract channel information for SSID '{ssid}'")
 
     # Process Data frames to find clients associated with APs
     if packet.haslayer(Dot11) and packet.type == 2:  # Data frame
@@ -187,12 +210,12 @@ def display_results():
     for ssid, clients in network_clients.items():
         channels = sorted(ssid_channels[ssid])
         if bssid_signal_strength[ssid]:  # Ensure there is signal strength data
-            primary_channel = max(bssid_signal_strength[ssid], key=bssid_signal_strength[ssid].get)  # Channel with strongest signal
+            primary_channel = max(bssid_signal_strength[ssid], key=lambda ch: bssid_signal_strength[ssid][ch])
             signal_strength = bssid_signal_strength[ssid][primary_channel]
         else:
             primary_channel = "N/A"
             signal_strength = "N/A"
-        
+
         print(f"SSID: {ssid}, Primary Channel: {primary_channel}, Other Channels: {', '.join(map(str, channels))}, Clients: {len(clients)}, Signal: {signal_strength} dBm")
 
 def sniff_packets(sniff_timeout, sniff_count):
