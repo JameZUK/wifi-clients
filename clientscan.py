@@ -21,6 +21,8 @@ ssid_channels = defaultdict(set)  # Track channels for each SSID
 sniffing = True
 debug_mode = False
 available_channels = []
+sniff_thread = None  # Thread object for sniffing
+interface = None  # Global variable to hold interface name
 
 # Function to retrieve supported channels from the WiFi interface
 def get_supported_channels(interface):
@@ -54,7 +56,7 @@ def passive_scan_for_ssids(interface):
             break  # Stop scanning if sniffing flag is set to False
         # Switch to the channel
         subprocess.call(['iwconfig', interface, 'channel', str(channel)])
-        time.sleep(0.2)  # Short dwell time for faster scanning
+        time.sleep(0.5)  # Slightly longer dwell time to ensure stability
 
         # Capture packets to detect SSIDs
         packets = sniff(iface=interface, timeout=1, count=50, store=True)
@@ -74,15 +76,28 @@ def passive_scan_for_ssids(interface):
         print(f"Active channels detected: {active_channels}")
     return list(active_channels)
 
-# Function to switch WiFi channels for main scan
+# Function to switch WiFi channels for main scan with paused sniffing
 def hop_channel(interface, channels):
-    global sniffing
+    global sniff_thread, sniffing
     for channel in channels:
         if not sniffing:
             break
+
+        # Temporarily stop sniffing while switching channels
+        if sniff_thread and sniff_thread.is_alive():
+            sniffing = False  # Stop the sniffing thread
+            sniff_thread.join()  # Ensure it exits fully before switching channels
+
+        # Switch to the next channel
         subprocess.call(['iwconfig', interface, 'channel', str(channel)])
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Scanning on Channel {channel}")
-        time.sleep(0.5)  # Short dwell time per channel for real-time responsiveness
+        time.sleep(1)  # Slightly longer dwell time for stability
+
+        # Restart sniffing on the new channel
+        sniffing = True
+        sniff_thread = threading.Thread(target=sniff_packets)
+        sniff_thread.daemon = True
+        sniff_thread.start()
 
 # Function to handle packet processing and track clients
 def packet_handler(packet):
@@ -124,6 +139,8 @@ def stop_sniffing(signum, frame):
     global sniffing
     sniffing = False
     print("\nStopping scan...")
+    if sniff_thread and sniff_thread.is_alive():
+        sniff_thread.join()
 
 def display_results():
     print("\nCurrent Results:")
@@ -133,6 +150,11 @@ def display_results():
         signal_strength = bssid_signal_strength[ssid][primary_channel]
         print(f"SSID: {ssid}, Primary Channel: {primary_channel}, Other Channels: {', '.join(map(str, channels))}, Clients: {len(clients)}, Signal: {signal_strength} dBm")
 
+def sniff_packets():
+    global sniffing
+    while sniffing:
+        sniff(iface=interface, prn=packet_handler, timeout=1, store=0)
+
 def main():
     parser = argparse.ArgumentParser(description="WiFi Scanner to count clients per SSID.")
     parser.add_argument('-i', '--interface', required=True, help='Wireless interface in monitor mode (e.g., wlan0mon)')
@@ -141,7 +163,7 @@ def main():
     parser.add_argument('--debug', action='store_true', help='Enable debug output')
     args = parser.parse_args()
 
-    global debug_mode, sniffing
+    global debug_mode, sniffing, sniff_thread, interface
     debug_mode = args.debug
 
     interface = args.interface
@@ -158,17 +180,6 @@ def main():
 
     # Register signal handler for Ctrl+C
     signal.signal(signal.SIGINT, stop_sniffing)
-
-    # Start sniffing packets in a separate thread
-    def sniff_packets():
-        global sniffing
-        while sniffing:
-            sniff(iface=interface, prn=packet_handler, timeout=1, store=0)
-    
-    # Start the sniffing thread
-    sniff_thread = threading.Thread(target=sniff_packets)
-    sniff_thread.daemon = True
-    sniff_thread.start()
 
     # Main loop for scanning and display
     last_scan_time = 0
@@ -187,7 +198,8 @@ def main():
         print("\nKeyboardInterrupt received. Exiting gracefully...")
 
     sniffing = False
-    sniff_thread.join()
+    if sniff_thread and sniff_thread.is_alive():
+        sniff_thread.join()
     print("\nFinal Results:")
     display_results()
 
