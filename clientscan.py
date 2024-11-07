@@ -7,6 +7,8 @@ import signal
 import sys
 import argparse
 import time
+import subprocess
+import re
 
 # Dictionary to store BSSID -> SSID mapping
 bssid_ssid_map = {}
@@ -15,10 +17,35 @@ network_clients = defaultdict(set)
 # Dictionary to store BSSID -> Signal Strength
 bssid_signal_strength = {}
 
-# Global variable to control sniffing
+# Global variables to control sniffing and debugging
 sniffing = True
-# Global variable to control debug output
 debug_mode = False
+channels = []
+
+# Function to get supported channels from the interface
+def get_supported_channels(interface):
+    global channels
+    try:
+        # Run iwlist to get channel information
+        iwlist_output = subprocess.check_output(['iwlist', interface, 'channel'], text=True)
+        # Find all channel numbers in the iwlist output
+        channels = re.findall(r'Channel (\d+)', iwlist_output)
+        channels = list(map(int, channels))  # Convert to integers
+        if debug_mode:
+            print(f"Supported channels: {channels}")
+    except subprocess.CalledProcessError:
+        print(f"Failed to retrieve channels for interface {interface}. Ensure it's in monitor mode.")
+        sys.exit(1)
+
+# Function to switch WiFi channels
+def hop_channel(interface):
+    for channel in channels:
+        if not sniffing:  # Stop hopping if sniffing has stopped
+            break
+        subprocess.call(['iwconfig', interface, 'channel', str(channel)])
+        if debug_mode:
+            print(f"Switched to channel {channel}")
+        time.sleep(1)  # Pause on each channel for 1 second
 
 # Function to handle packet processing
 def packet_handler(packet):
@@ -109,6 +136,9 @@ def main():
 
     print(f"Starting WiFi scan on interface {interface}. Press Ctrl+C to stop.")
 
+    # Get supported channels from the interface
+    get_supported_channels(interface)
+
     # Register signal handler for Ctrl+C
     signal.signal(signal.SIGINT, stop_sniffing)
 
@@ -120,13 +150,9 @@ def main():
     sniff_thread = threading.Thread(target=sniff_packets)
     sniff_thread.start()
 
-    # Periodically display results
-    try:
-        while sniffing:
-            time.sleep(interval)
-            display_results()
-    except KeyboardInterrupt:
-        pass
+    # Channel hopping loop
+    while sniffing:
+        hop_channel(interface)
 
     sniff_thread.join()
     print("\nFinal Results:")
