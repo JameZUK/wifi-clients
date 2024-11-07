@@ -22,9 +22,16 @@ debug_mode = False
 
 # Function to handle packet processing
 def packet_handler(packet):
-    # Debugging output to confirm packet capture
+    # Ignore Control frames and focus on Beacon, Probe Response, and Data frames
+    if packet.type == 1:  # Type 1 = Control frame
+        if debug_mode:
+            print("Ignoring Control frame.")
+        return
+
+    # Debugging output to confirm packet capture type
     if debug_mode:
-        print(f"Captured packet: {packet.summary()}")
+        frame_type = "Management" if packet.type == 0 else "Data" if packet.type == 2 else "Unknown"
+        print(f"Captured {frame_type} frame: {packet.summary()}")
 
     # Check for Beacon and Probe Response frames (to get SSIDs)
     if packet.haslayer(Dot11Beacon) or packet.haslayer(Dot11ProbeResp):
@@ -38,7 +45,7 @@ def packet_handler(packet):
         bssid_signal_strength[bssid] = signal
 
     # Check for Data frames to find clients associated with APs
-    if packet.haslayer(Dot11) and packet.type == 2 and packet.subtype == 0:  # Data frames
+    if packet.haslayer(Dot11) and packet.type == 2:  # Data frame
         addr1 = packet.addr1  # Receiver MAC
         addr2 = packet.addr2  # Transmitter MAC
         addr3 = packet.addr3  # BSSID
