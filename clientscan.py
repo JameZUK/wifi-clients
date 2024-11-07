@@ -49,6 +49,8 @@ def passive_scan_for_ssids(interface):
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Scanning for active SSIDs...")
 
     for channel in available_channels:
+        if not sniffing:
+            break  # Stop scanning if sniffing flag is set to False
         # Switch to the channel
         subprocess.call(['iwconfig', interface, 'channel', str(channel)])
         time.sleep(0.2)  # Short dwell time for faster scanning
@@ -82,6 +84,8 @@ def hop_channel(interface, channels):
 
 # Function to handle packet processing and track clients
 def packet_handler(packet):
+    if not sniffing:
+        return  # Stop processing if sniffing flag is set to False
     if packet.type == 1:  # Ignore Control frames
         return
 
@@ -156,23 +160,29 @@ def main():
     def sniff_packets():
         while sniffing:
             sniff(iface=interface, prn=packet_handler, timeout=1, store=0)
-
+    
+    # Start the sniffing thread
     sniff_thread = threading.Thread(target=sniff_packets)
+    sniff_thread.daemon = True
     sniff_thread.start()
 
-    # Periodically update the list of active channels based on available SSIDs
+    # Main loop for scanning and display
     last_scan_time = 0
-    while sniffing:
-        current_time = time.time()
-        if current_time - last_scan_time >= scan_interval:
-            active_channels = passive_scan_for_ssids(interface)
-            last_scan_time = current_time
-        if not active_channels:
-            active_channels = available_channels  # Fallback to all channels if none detected
-        hop_channel(interface, active_channels)
-        display_results()
-        time.sleep(interval)
+    try:
+        while sniffing:
+            current_time = time.time()
+            if current_time - last_scan_time >= scan_interval:
+                active_channels = passive_scan_for_ssids(interface)
+                last_scan_time = current_time
+            if not active_channels:
+                active_channels = available_channels  # Fallback to all channels if none detected
+            hop_channel(interface, active_channels)
+            display_results()
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print("\nKeyboardInterrupt received. Exiting gracefully...")
 
+    sniffing = False
     sniff_thread.join()
     print("\nFinal Results:")
     display_results()
