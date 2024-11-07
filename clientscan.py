@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+from pywifi import PyWiFi, const
+from pywifi import Profile
 from scapy.all import *
 from collections import defaultdict
 import threading
@@ -7,8 +9,6 @@ import signal
 import sys
 import argparse
 import time
-import subprocess
-import re
 from datetime import datetime
 
 # Dictionaries for SSID and client tracking
@@ -19,53 +19,46 @@ bssid_signal_strength = {}
 # Global variables to control scanning and debugging
 sniffing = True
 debug_mode = False
-available_channels = []
+wifi_interface = None
 
-# Function to get supported channels from the interface (initial full scan)
-def get_supported_channels(interface):
-    global available_channels
-    try:
-        iwlist_output = subprocess.check_output(['iwlist', interface, 'channel'], text=True)
-        all_channels = re.findall(r'Channel (\d+)', iwlist_output)
-        available_channels = list(map(int, all_channels))
-        if debug_mode:
-            print(f"Supported channels: {available_channels}")
-    except subprocess.CalledProcessError:
-        print(f"Failed to retrieve channels for interface {interface}. Ensure it's in monitor mode.")
-        sys.exit(1)
+# Function to initialize the WiFi interface using pywifi
+def initialize_wifi_interface(interface_name):
+    wifi = PyWiFi()
+    iface = None
+    for iface in wifi.interfaces():
+        if iface.name() == interface_name:
+            return iface
+    raise Exception(f"Interface {interface_name} not found. Ensure it's in monitor mode.")
 
-# Function to scan for available SSIDs and identify active channels
-def scan_for_active_channels(interface):
+# Function to perform a faster network scan using pywifi
+def fast_scan_for_ssids(iface):
+    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Performing fast scan for SSIDs...")
+    iface.scan()  # Start scanning
+    time.sleep(2)  # Wait for scan results to be available (may vary by OS)
+    scan_results = iface.scan_results()
+    
     active_channels = set()
-    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Scanning for active SSIDs...")
-    for channel in available_channels:
-        # Switch to the channel
-        subprocess.call(['iwconfig', interface, 'channel', str(channel)])
-        time.sleep(0.5)  # Allow time for channel switch
-        # Capture packets briefly to detect SSIDs
-        packets = sniff(iface=interface, timeout=0.5, count=20, store=True)
-        for packet in packets:
-            if packet.haslayer(Dot11Beacon) or packet.haslayer(Dot11ProbeResp):
-                ssid = packet[Dot11Elt].info.decode('utf-8', errors='ignore')
-                bssid = packet[Dot11].addr2
-                if ssid:
-                    active_channels.add(channel)
-                    bssid_ssid_map[bssid] = ssid
-                    bssid_signal_strength[bssid] = packet.dBm_AntSignal if hasattr(packet, 'dBm_AntSignal') else 'N/A'
-                    if debug_mode:
-                        print(f"Found SSID '{ssid}' on channel {channel}")
+    for network in scan_results:
+        ssid = network.ssid
+        bssid = network.bssid
+        channel = network.freq  # Frequency in MHz
+        signal = network.signal  # Signal strength in dBm
+
+        # Convert frequency to channel number for 2.4GHz and 5GHz bands
+        if 2412 <= channel <= 2472:  # 2.4 GHz band
+            channel = (channel - 2407) // 5
+        elif 5170 <= channel <= 5825:  # 5 GHz band
+            channel = (channel - 5000) // 5
+
+        active_channels.add(channel)
+        bssid_ssid_map[bssid] = ssid
+        bssid_signal_strength[bssid] = signal
+        if debug_mode:
+            print(f"Found SSID '{ssid}' on channel {channel} with BSSID {bssid}")
+
     return list(active_channels)
 
-# Function to switch WiFi channels for main scan
-def hop_channel(interface, channels):
-    for channel in channels:
-        if not sniffing:
-            break
-        subprocess.call(['iwconfig', interface, 'channel', str(channel)])
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Scanning on Channel {channel}")
-        time.sleep(1)  # Pause on each channel for 1 second
-
-# Function to handle packet processing
+# Function to process packets and track clients
 def packet_handler(packet):
     if packet.type == 1:  # Ignore Control frames
         return
@@ -111,21 +104,21 @@ def display_results():
 
 def main():
     parser = argparse.ArgumentParser(description="WiFi Scanner to count clients per SSID.")
-    parser.add_argument('-i', '--interface', required=True, help='Wireless interface in monitor mode (e.g., wlan0mon)')
+    parser.add_argument('-i', '--interface', required=True, help='Wireless interface for pywifi (e.g., wlan0)')
     parser.add_argument('-t', '--interval', type=int, default=5, help='Interval in seconds between output updates')
     parser.add_argument('--debug', action='store_true', help='Enable debug output')
     args = parser.parse_args()
 
-    global debug_mode
+    global debug_mode, wifi_interface
     debug_mode = args.debug
 
-    interface = args.interface
+    interface_name = args.interface
     interval = args.interval
 
-    print(f"Starting WiFi scan on interface {interface}. Press Ctrl+C to stop.")
+    print(f"Starting WiFi scan on interface {interface_name}. Press Ctrl+C to stop.")
 
-    # Get initial supported channels
-    get_supported_channels(interface)
+    # Initialize pywifi interface
+    wifi_interface = initialize_wifi_interface(interface_name)
 
     # Register signal handler for Ctrl+C
     signal.signal(signal.SIGINT, stop_sniffing)
@@ -133,18 +126,16 @@ def main():
     # Start sniffing packets in a separate thread
     def sniff_packets():
         while sniffing:
-            sniff(iface=interface, prn=packet_handler, timeout=1, store=0)
+            sniff(iface=interface_name, prn=packet_handler, timeout=1, store=0)
 
     sniff_thread = threading.Thread(target=sniff_packets)
     sniff_thread.start()
 
     # Periodically update the list of active channels based on available SSIDs
     while sniffing:
-        active_channels = scan_for_active_channels(interface)
-        if not active_channels:
-            active_channels = available_channels  # Fallback to all channels if none detected
-        hop_channel(interface, active_channels)
+        active_channels = fast_scan_for_ssids(wifi_interface)
         display_results()
+        time.sleep(interval)
 
     sniff_thread.join()
     print("\nFinal Results:")
