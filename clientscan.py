@@ -32,20 +32,28 @@ def get_supported_channels(interface):
         # Run iwlist to get channel information
         iwlist_output = subprocess.check_output(['iwlist', interface, 'channel'], text=True)
         # Extract channel numbers and frequencies
-        channels = re.findall(r'Channel\s+(\d+)', iwlist_output)
-        frequencies = re.findall(r'Frequency:(\d+\.\d+) GHz', iwlist_output)
-        
-        # Map channels to their frequency bands
+        pattern = r'Channel\s+(\d+)\s*:\s*Frequency\s+(\d+\.\d+)\s*GHz'
+        channels_freqs = re.findall(pattern, iwlist_output)
+
+        if not channels_freqs:
+            # Try alternative pattern without colon
+            pattern = r'Channel\s+(\d+)\s*Frequency\s+(\d+\.\d+)\s*GHz'
+            channels_freqs = re.findall(pattern, iwlist_output)
+
+        if not channels_freqs:
+            print("No channels found. Please ensure the interface is correct and supports monitor mode.")
+            sys.exit(1)
+
         channel_freq_map = {}
-        for ch, freq in zip(channels, frequencies):
+        for ch, freq in channels_freqs:
             channel_freq_map[int(ch)] = float(freq)
-        
+
         # Categorize channels into 2.4 GHz and 5 GHz
         selected_channels = [ch for ch, freq in channel_freq_map.items() if 2.4 <= freq < 3.0 or 5.0 <= freq < 6.0]
-        
+
         # Sort channels for orderly scanning
         selected_channels.sort()
-        
+
         print(f"Available channels for {interface}: {selected_channels}")
     except subprocess.CalledProcessError:
         print(f"Failed to retrieve channels for interface {interface}. Ensure it's in monitor mode.")
