@@ -40,26 +40,28 @@ def freq_to_channel(freq):
     else:
         return None
 
-# Corrected function to retrieve supported channels using PyRIC
+# Updated get_supported_channels function
 def get_supported_channels(interface):
     global selected_channels
     try:
         # Get the wireless interface
         iface = pyw.getcard(interface)
-        # Get the list of supported frequencies
-        frequencies = pyw.devfreqs(iface)
-        # Map frequencies to channels
-        for freq in frequencies:
-            channel = channels.rf2ch(freq)
+        # Get the list of supported channels and frequencies
+        chs = pyw.devchs(iface)
+        selected_channels = []
+        for ch in chs:
+            channel = ch[0]
+            freq = ch[1]
             if debug_mode:
-                print(f"Detected Frequency: {freq} MHz, Channel: {channel}")
-            # Include channels in 2.4 GHz and 5 GHz bands
-            if channel and (1 <= channel <= 14 or 36 <= channel <= 165):
+                print(f"Detected Channel: {channel}, Frequency: {freq} MHz")
+            # Include standard Wi-Fi channels in 2.4 GHz and 5 GHz bands
+            if (1 <= channel <= 14) or (36 <= channel <= 165):
                 selected_channels.append(channel)
                 if debug_mode:
                     print(f"Added Channel {channel} to selected_channels")
-            elif debug_mode:
-                print(f"Skipping unsupported or invalid Channel {channel}")
+            else:
+                if debug_mode:
+                    print(f"Skipping unsupported or invalid Channel {channel}")
         # Remove duplicates and sort
         selected_channels = sorted(set(selected_channels))
         print(f"Available channels for {interface}: {selected_channels}")
@@ -199,7 +201,7 @@ def packet_handler(packet):
             if debug_mode:
                 print("Packet does not have RadioTap layer; cannot extract frequency and signal strength.")
         bssid_ssid_map[bssid] = ssid
-        ssid_bssids[ssid].add(bssid)  # Track BSSID (AP) per SSID
+        ssid_bssids[ssid].add(bssid)  # Track BSSIDs (APs) per SSID
         if channel:
             ssid_channels[ssid].add(channel)
             # Update signal strength only if the new signal is stronger
