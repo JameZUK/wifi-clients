@@ -21,7 +21,7 @@ ssid_channels = defaultdict(set)  # Track channels for each SSID
 sniffing = True
 debug_mode = False
 available_channels = []
-sniff_thread = None  # Thread object for sniffing
+channel_lock = threading.Lock()  # Lock to coordinate channel switching
 interface = None  # Global variable to hold interface name
 
 # Function to retrieve supported channels from the WiFi interface
@@ -54,9 +54,11 @@ def passive_scan_for_ssids(interface):
     for channel in available_channels:
         if not sniffing:
             break  # Stop scanning if sniffing flag is set to False
-        # Switch to the channel
-        subprocess.call(['iwconfig', interface, 'channel', str(channel)])
-        time.sleep(0.5)  # Slightly longer dwell time to ensure stability
+
+        # Switch to the channel, with lock to prevent socket errors during sniffing
+        with channel_lock:
+            subprocess.call(['iwconfig', interface, 'channel', str(channel)])
+        time.sleep(1)  # Ensure stability before resuming sniffing
 
         # Capture packets to detect SSIDs
         packets = sniff(iface=interface, timeout=1, count=50, store=True)
@@ -79,32 +81,20 @@ def passive_scan_for_ssids(interface):
         print(f"Active channels detected: {active_channels}")
     return list(active_channels)
 
-# Function to switch WiFi channels for main scan with paused sniffing
+# Function to switch WiFi channels in main scan
 def hop_channel(interface, channels):
-    global sniff_thread, sniffing
     for channel in channels:
         if not sniffing:
             break
 
-        # Temporarily stop sniffing while switching channels
-        if sniff_thread and sniff_thread.is_alive():
-            sniffing = False  # Stop the sniffing thread
-            sniff_thread.join()  # Ensure it exits fully before switching channels
-
-        # Switch to the next channel
-        subprocess.call(['iwconfig', interface, 'channel', str(channel)])
+        # Switch to the next channel with lock to prevent socket errors during sniffing
+        with channel_lock:
+            subprocess.call(['iwconfig', interface, 'channel', str(channel)])
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Scanning on Channel {channel}")
         time.sleep(2)  # Increased dwell time for stability
 
-        # Restart sniffing on the new channel
-        sniffing = True
-        sniff_thread = threading.Thread(target=sniff_packets)
-        sniff_thread.daemon = True
-        sniff_thread.start()
-
 # Function to handle packet processing and track clients
 def packet_handler(packet):
-    global sniffing
     if not sniffing:
         return  # Stop processing if sniffing flag is set to False
     if packet.type == 1:  # Ignore Control frames
@@ -145,8 +135,6 @@ def stop_sniffing(signum, frame):
     global sniffing
     sniffing = False
     print("\nStopping scan...")
-    if sniff_thread and sniff_thread.is_alive():
-        sniff_thread.join()
 
 def display_results():
     print("\nCurrent Results:")
@@ -159,7 +147,9 @@ def display_results():
 def sniff_packets():
     global sniffing
     while sniffing:
-        sniff(iface=interface, prn=packet_handler, timeout=1, store=0)
+        # Acquire channel lock to prevent errors during sniffing
+        with channel_lock:
+            sniff(iface=interface, prn=packet_handler, timeout=1, store=0)
 
 def main():
     parser = argparse.ArgumentParser(description="WiFi Scanner to count clients per SSID.")
@@ -169,7 +159,7 @@ def main():
     parser.add_argument('--debug', action='store_true', help='Enable debug output')
     args = parser.parse_args()
 
-    global debug_mode, sniffing, sniff_thread, interface
+    global debug_mode, sniffing, interface
     debug_mode = args.debug
 
     interface = args.interface
@@ -186,6 +176,11 @@ def main():
 
     # Register signal handler for Ctrl+C
     signal.signal(signal.SIGINT, stop_sniffing)
+
+    # Start the sniffing thread
+    sniff_thread = threading.Thread(target=sniff_packets)
+    sniff_thread.daemon = True
+    sniff_thread.start()
 
     # Main loop for scanning and display
     last_scan_time = 0
