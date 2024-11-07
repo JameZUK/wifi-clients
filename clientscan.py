@@ -21,7 +21,7 @@ ssid_channels = defaultdict(set)  # Track channels for each SSID
 # Global variables to control scanning and debugging
 sniffing = True
 debug_mode = False
-selected_channels = [1, 6, 11, 13]  # Reduced set for testing stability
+selected_channels = []  # To be populated dynamically
 channel_lock = threading.Lock()  # Lock to coordinate channel switching
 interface = None  # Global variable to hold interface name
 
@@ -31,10 +31,22 @@ def get_supported_channels(interface):
     try:
         # Run iwlist to get channel information
         iwlist_output = subprocess.check_output(['iwlist', interface, 'channel'], text=True)
-        # Find all channel numbers in the iwlist output
-        available_channels = re.findall(r'Channel\s+(\d+)', iwlist_output)
-        available_channels = list(map(int, available_channels))  # Convert to integers
-        print(f"Available channels for {interface}: {available_channels}")
+        # Extract channel numbers and frequencies
+        channels = re.findall(r'Channel\s+(\d+)', iwlist_output)
+        frequencies = re.findall(r'Frequency:(\d+\.\d+) GHz', iwlist_output)
+        
+        # Map channels to their frequency bands
+        channel_freq_map = {}
+        for ch, freq in zip(channels, frequencies):
+            channel_freq_map[int(ch)] = float(freq)
+        
+        # Categorize channels into 2.4 GHz and 5 GHz
+        selected_channels = [ch for ch, freq in channel_freq_map.items() if 2.4 <= freq < 3.0 or 5.0 <= freq < 6.0]
+        
+        # Sort channels for orderly scanning
+        selected_channels.sort()
+        
+        print(f"Available channels for {interface}: {selected_channels}")
     except subprocess.CalledProcessError:
         print(f"Failed to retrieve channels for interface {interface}. Ensure it's in monitor mode.")
         sys.exit(1)
@@ -76,7 +88,11 @@ def passive_scan_for_ssids(interface, sniff_timeout, sniff_count):
                 if not ssid:
                     ssid = "<HIDDEN>"
                 bssid = packet[Dot11].addr2
-                signal = packet.dBm_AntSignal if hasattr(packet, 'dBm_AntSignal') else -100  # Default low if not detected
+                # Extract signal strength from Radiotap header if available
+                if packet.haslayer(RadioTap):
+                    signal = packet[RadioTap].dBm_AntSignal if hasattr(packet[RadioTap], 'dBm_AntSignal') else -100
+                else:
+                    signal = -100  # Default low if not detected
                 if ssid:
                     active_channels.add(channel)
                     bssid_ssid_map[bssid] = ssid
@@ -114,7 +130,11 @@ def packet_handler(packet):
         if not ssid:
             ssid = "<HIDDEN>"
         bssid = packet[Dot11].addr2
-        signal = packet.dBm_AntSignal if hasattr(packet, 'dBm_AntSignal') else -100
+        # Extract signal strength from Radiotap header if available
+        if packet.haslayer(RadioTap):
+            signal = packet[RadioTap].dBm_AntSignal if hasattr(packet[RadioTap], 'dBm_AntSignal') else -100
+        else:
+            signal = -100  # Default low if not detected
         bssid_ssid_map[bssid] = ssid
         bssid_signal_strength[ssid][packet[Dot11].Channel] = signal
 
@@ -200,7 +220,7 @@ def main():
     # Set interface to monitor mode
     set_monitor_mode(interface)
 
-    # Optionally get supported channels (though selected_channels is predefined)
+    # Get supported channels (dynamically includes 2.4 GHz and 5 GHz)
     get_supported_channels(interface)
 
     # Register signal handler for Ctrl+C
@@ -213,6 +233,8 @@ def main():
 
     # Main loop for scanning and display
     last_scan_time = 0
+    active_channels = selected_channels.copy()  # Initialize with all selected channels
+
     try:
         while sniffing:
             current_time = time.time()
@@ -220,7 +242,7 @@ def main():
                 active_channels = passive_scan_for_ssids(interface, sniff_timeout, sniff_count)
                 last_scan_time = current_time
             if not active_channels:
-                active_channels = selected_channels  # Fallback to pre-selected channels if none detected
+                active_channels = selected_channels.copy()  # Fallback to pre-selected channels if none detected
             hop_channel(interface, active_channels, hop_sleep)
             display_results()
             time.sleep(interval)
