@@ -10,6 +10,7 @@ import time
 import subprocess
 import re
 from datetime import datetime
+import logging
 
 # Dictionaries for SSID and client tracking
 bssid_ssid_map = {}
@@ -65,7 +66,7 @@ def passive_scan_for_ssids(interface):
             packets = sniff(iface=interface, timeout=2, count=50, store=True)
         except Exception as e:
             if debug_mode:
-                print(f"Error during sniffing: {e}")
+                print(f"Error during sniffing on channel {channel}: {e}")
             continue  # Skip to the next channel
 
         for packet in packets:
@@ -182,12 +183,18 @@ def main():
     interval = args.interval
     scan_interval = args.scan_interval  # SSID scan interval
 
+    # Configure logging to suppress Scapy warnings if debug_mode is off
+    if not debug_mode:
+        logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
+    else:
+        logging.getLogger("scapy.runtime").setLevel(logging.WARNING)
+
     print(f"Starting WiFi scan on interface {interface}. Press Ctrl+C to stop.")
 
     # Set interface to monitor mode
     set_monitor_mode(interface)
 
-    # Get supported channels from the interface (optional, since selected_channels is predefined)
+    # Optionally get supported channels (though selected_channels is predefined)
     get_supported_channels(interface)
 
     # Register signal handler for Ctrl+C
