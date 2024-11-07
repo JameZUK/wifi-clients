@@ -207,7 +207,10 @@ def stop_sniffing(signum, frame):
 
 def display_results():
     print("\nCurrent Results:")
-    for ssid, clients in network_clients.items():
+    # Get all SSIDs that have been detected
+    all_ssids = set(ssid_channels.keys())
+    for ssid in all_ssids:
+        clients = network_clients.get(ssid, set())
         channels = sorted(ssid_channels[ssid])
         if bssid_signal_strength[ssid]:  # Ensure there is signal strength data
             primary_channel = max(bssid_signal_strength[ssid], key=lambda ch: bssid_signal_strength[ssid][ch])
