@@ -25,34 +25,20 @@ selected_channels = []  # To be populated dynamically
 channel_lock = threading.Lock()  # Lock to coordinate channel switching
 interface = None  # Global variable to hold interface name
 
-# Function to retrieve supported channels from the WiFi interface
+# Function to retrieve supported channels from the WiFi interface using 'iw'
 def get_supported_channels(interface):
     global selected_channels
     try:
-        # Run iwlist to get channel information
-        iwlist_output = subprocess.check_output(['iwlist', interface, 'channel'], text=True)
+        # Run iw command to get channel information
+        iw_output = subprocess.check_output(['iw', 'list'], text=True)
         
-        # Uncomment the following line to see the raw iwlist output for debugging
-        # print("Raw iwlist output:\n", iwlist_output)
+        # Uncomment the following line to see the raw iw output for debugging
+        # print("Raw iw output:\n", iw_output)
         
-        # Enhanced regex to capture channel numbers and frequencies
-        # This pattern captures lines like:
-        # Channel 1 : Frequency 2.412 GHz (Channel 1)
-        # Channel 36 : Frequency 5.180 GHz (Channel 36)
-        pattern = r'Channel\s+(\d+)\s*:\s*Frequency\s+(\d+\.\d+)\s*GHz'
-        channels_freqs = re.findall(pattern, iwlist_output)
-        
-        if not channels_freqs:
-            # Try alternative pattern without colon
-            # e.g., "Channel 1 Frequency 2.412 GHz"
-            pattern_alt = r'Channel\s+(\d+)\s*Frequency\s+(\d+\.\d+)\s*GHz'
-            channels_freqs = re.findall(pattern_alt, iwlist_output)
-        
-        if not channels_freqs:
-            # Another alternative pattern
-            # e.g., "Channel 1    Frequency:2.412 GHz"
-            pattern_alt2 = r'Channel\s+(\d+)\s+Frequency[:=]\s*(\d+\.\d+)\s*GHz'
-            channels_freqs = re.findall(pattern_alt2, iwlist_output)
+        # Parse the output to find frequencies and corresponding channels
+        # We'll look for lines like '* 5180 MHz [36] (20.0 dBm)'
+        pattern = r'\* \s*(\d+) MHz \s* (\d+)'
+        channels_freqs = re.findall(pattern, iw_output, re.MULTILINE)
         
         if not channels_freqs:
             print("No channels found. Please ensure the interface is correct and supports monitor mode.")
@@ -60,18 +46,23 @@ def get_supported_channels(interface):
         
         # Map channels to their frequency bands
         channel_freq_map = {}
-        for ch, freq in channels_freqs:
-            channel_freq_map[int(ch)] = float(freq)
+        for freq_mhz, ch in channels_freqs:
+            freq_ghz = int(freq_mhz) / 1000.0  # Convert MHz to GHz
+            channel_freq_map[int(ch)] = freq_ghz
         
         # Categorize channels into 2.4 GHz and 5 GHz
-        selected_channels = [ch for ch, freq in channel_freq_map.items() if 2.4 <= freq < 3.0 or 5.0 <= freq < 6.0]
+        selected_channels = [ch for ch, freq in channel_freq_map.items() if 2.4 <= freq < 2.5 or 5.0 <= freq < 6.0]
         
         # Sort channels for orderly scanning
         selected_channels.sort()
         
+        if not selected_channels:
+            print("No valid WiFi channels found for scanning.")
+            sys.exit(1)
+        
         print(f"Available channels for {interface}: {selected_channels}")
     except subprocess.CalledProcessError:
-        print(f"Failed to retrieve channels for interface {interface}. Ensure it's in monitor mode.")
+        print(f"Failed to retrieve channels for interface {interface}. Ensure it's in monitor mode and the 'iw' command is installed.")
         sys.exit(1)
 
 # Function to initialize interface in monitor mode
@@ -94,7 +85,7 @@ def passive_scan_for_ssids(interface, sniff_timeout, sniff_count):
         # Switch to the channel, with lock to prevent socket errors during sniffing
         with channel_lock:
             subprocess.call(['iwconfig', interface, 'channel', str(channel)])
-        time.sleep(1)  # Reduced sleep for faster scanning
+        time.sleep(0.5)  # Reduced sleep for faster scanning
 
         # Capture packets to detect SSIDs
         try:
@@ -112,8 +103,8 @@ def passive_scan_for_ssids(interface, sniff_timeout, sniff_count):
                     ssid = "<HIDDEN>"
                 bssid = packet[Dot11].addr2
                 # Extract signal strength from Radiotap header if available
-                if packet.haslayer(RadioTap):
-                    signal = packet[RadioTap].dBm_AntSignal if hasattr(packet[RadioTap], 'dBm_AntSignal') else -100
+                if hasattr(packet, 'dBm_AntSignal'):
+                    signal = packet.dBm_AntSignal
                 else:
                     signal = -100  # Default low if not detected
                 if ssid:
@@ -156,8 +147,8 @@ def packet_handler(packet):
             ssid = "<HIDDEN>"
         bssid = packet[Dot11].addr2
         # Extract signal strength from Radiotap header if available
-        if packet.haslayer(RadioTap):
-            signal = packet[RadioTap].dBm_AntSignal if hasattr(packet[RadioTap], 'dBm_AntSignal') else -100
+        if hasattr(packet, 'dBm_AntSignal'):
+            signal = packet.dBm_AntSignal
         else:
             signal = -100  # Default low if not detected
         bssid_ssid_map[bssid] = ssid
@@ -219,9 +210,9 @@ def main():
     parser.add_argument('-t', '--interval', type=int, default=5, help='Interval in seconds between output updates')
     parser.add_argument('--scan_interval', type=int, default=30, help='Interval in seconds for rescanning SSIDs')
     parser.add_argument('--debug', action='store_true', help='Enable debug output')
-    parser.add_argument('--sniff_timeout', type=int, default=2, help='Timeout in seconds for sniffing packets during passive scan')
+    parser.add_argument('--sniff_timeout', type=float, default=1.0, help='Timeout in seconds for sniffing packets during passive scan')
     parser.add_argument('--sniff_count', type=int, default=50, help='Number of packets to capture during passive scan')
-    parser.add_argument('--hop_sleep', type=int, default=2, help='Sleep time in seconds after hopping to a new channel')
+    parser.add_argument('--hop_sleep', type=float, default=0.5, help='Sleep time in seconds after hopping to a new channel')
     args = parser.parse_args()
 
     global debug_mode, sniffing, interface, selected_channels
