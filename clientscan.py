@@ -7,10 +7,10 @@ import signal
 import sys
 import argparse
 import time
-import subprocess
-import re
 from datetime import datetime
 import logging
+import pyric
+import pyric.pyw as pyw
 
 # Dictionaries for SSID and client tracking
 bssid_ssid_map = {}
@@ -25,52 +25,38 @@ selected_channels = []  # To be populated dynamically
 channel_lock = threading.Lock()  # Lock to coordinate channel switching
 interface = None  # Global variable to hold interface name
 
-# Function to retrieve supported channels from the WiFi interface using 'iw'
+# Function to retrieve supported channels using PyRIC
 def get_supported_channels(interface):
     global selected_channels
     try:
-        # Run iw command to get channel information
-        iw_output = subprocess.check_output(['iw', 'list'], text=True)
-        
-        # Uncomment the following line to see the raw iw output for debugging
-        # print("Raw iw output:\n", iw_output)
-        
-        # Parse the output to find frequencies and corresponding channels
-        # We'll look for lines like '* 5180 MHz [36] (20.0 dBm)'
-        pattern = r'\* \s*(\d+) MHz \s* (\d+)'
-        channels_freqs = re.findall(pattern, iw_output, re.MULTILINE)
-        
-        if not channels_freqs:
-            print("No channels found. Please ensure the interface is correct and supports monitor mode.")
-            sys.exit(1)
-        
-        # Map channels to their frequency bands
-        channel_freq_map = {}
-        for freq_mhz, ch in channels_freqs:
-            freq_ghz = int(freq_mhz) / 1000.0  # Convert MHz to GHz
-            channel_freq_map[int(ch)] = freq_ghz
-        
-        # Categorize channels into 2.4 GHz and 5 GHz
-        selected_channels = [ch for ch, freq in channel_freq_map.items() if 2.4 <= freq < 2.5 or 5.0 <= freq < 6.0]
-        
-        # Sort channels for orderly scanning
-        selected_channels.sort()
-        
-        if not selected_channels:
-            print("No valid WiFi channels found for scanning.")
-            sys.exit(1)
-        
+        # Get the wireless interface
+        iface = pyw.getcard(interface)
+        # Get the list of supported frequencies
+        frequencies = pyw.freqs(iface)
+        # Map frequencies to channels
+        for freq in frequencies:
+            channel = pyw.chfromfreq(freq)
+            # Include channels in 2.4 GHz and 5 GHz bands
+            if 2412 <= freq <= 2484 or 5180 <= freq <= 5825:
+                selected_channels.append(channel)
+        # Remove duplicates and sort
+        selected_channels = sorted(set(selected_channels))
         print(f"Available channels for {interface}: {selected_channels}")
-    except subprocess.CalledProcessError:
-        print(f"Failed to retrieve channels for interface {interface}. Ensure it's in monitor mode and the 'iw' command is installed.")
+    except pyric.error as e:
+        print(f"Failed to retrieve channels for interface {interface}: {e}")
         sys.exit(1)
 
 # Function to initialize interface in monitor mode
 def set_monitor_mode(interface):
-    subprocess.call(['sudo', 'ifconfig', interface, 'down'])
-    subprocess.call(['sudo', 'iwconfig', interface, 'mode', 'monitor'])
-    subprocess.call(['sudo', 'ifconfig', interface, 'up'])
-    print(f"Interface {interface} set to monitor mode.")
+    try:
+        iface = pyw.getcard(interface)
+        pyw.down(iface)
+        pyw.modeset(iface, 'monitor')
+        pyw.up(iface)
+        print(f"Interface {interface} set to monitor mode.")
+    except pyric.error as e:
+        print(f"Failed to set {interface} to monitor mode: {e}")
+        sys.exit(1)
 
 # Function to perform a quick scan to detect available SSIDs and channels
 def passive_scan_for_ssids(interface, sniff_timeout, sniff_count):
@@ -84,7 +70,13 @@ def passive_scan_for_ssids(interface, sniff_timeout, sniff_count):
 
         # Switch to the channel, with lock to prevent socket errors during sniffing
         with channel_lock:
-            subprocess.call(['iwconfig', interface, 'channel', str(channel)])
+            try:
+                iface = pyw.getcard(interface)
+                pyw.chset(iface, channel)
+            except pyric.error as e:
+                if debug_mode:
+                    print(f"Failed to set channel {channel} on interface {interface}: {e}")
+                continue
         time.sleep(0.5)  # Reduced sleep for faster scanning
 
         # Capture packets to detect SSIDs
@@ -128,7 +120,13 @@ def hop_channel(interface, channels, sleep_time):
 
         # Switch to the next channel with lock to prevent socket errors during sniffing
         with channel_lock:
-            subprocess.call(['iwconfig', interface, 'channel', str(channel)])
+            try:
+                iface = pyw.getcard(interface)
+                pyw.chset(iface, channel)
+            except pyric.error as e:
+                if debug_mode:
+                    print(f"Failed to set channel {channel} on interface {interface}: {e}")
+                continue
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Scanning on Channel {channel}")
         time.sleep(sleep_time)  # Adjustable sleep time for faster scanning
 
