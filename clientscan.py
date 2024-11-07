@@ -12,6 +12,7 @@ import logging
 import pyric
 import pyric.pyw as pyw
 from pyric.utils import channels  # Import channels module
+import subprocess  # For potential alternative channel setting
 
 # Dictionaries for SSID and client tracking
 bssid_ssid_map = {}
@@ -26,6 +27,8 @@ debug_mode = False
 selected_channels = []  # To be populated dynamically
 channel_lock = threading.Lock()  # Lock to coordinate channel switching
 interface = None  # Global variable to hold interface name
+sniffing_event = threading.Event()
+sniffing_event.set()  # Start with the event set, allowing sniffing to proceed
 
 # Function to convert frequency to channel number
 def freq_to_channel(freq):
@@ -90,25 +93,36 @@ def passive_scan_for_ssids(interface, sniff_timeout, sniff_count):
     active_channels = set()
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Scanning for active SSIDs...")
 
+    # Pause the sniffing thread
+    sniffing_event.clear()
+
     for channel in selected_channels:
         if not sniffing:
             break  # Stop scanning if sniffing flag is set to False
 
         if debug_mode:
-            print(f"Attempting to scan on Channel {channel}")
+            print(f"\nAttempting to scan on Channel {channel}")
 
         # Switch to the channel, with lock to prevent socket errors during sniffing
         with channel_lock:
             try:
                 iface = pyw.getcard(interface)
                 pyw.chset(iface, channel)
+                # Verify that the channel has been set
+                current_channel = pyw.chget(iface)
                 if debug_mode:
-                    print(f"Successfully set interface {interface} to Channel {channel}")
+                    print(f"Set interface {interface} to Channel {channel}")
+                    print(f"Current channel is {current_channel}")
+                if current_channel != channel:
+                    print(f"Warning: Interface channel is {current_channel}, expected {channel}")
+                    continue  # Skip to the next channel if channel setting failed
             except pyric.error as e:
                 print(f"Failed to set channel {channel} on interface {interface}: {e}")
                 continue
 
-        # Determine if the channel is 2.4 GHz or 5 GHz
+        time.sleep(0.5)  # Slight delay to ensure the adapter is ready
+
+        # Determine sniffing parameters based on the band
         if 1 <= channel <= 14:
             # 2.4 GHz channel
             channel_sniff_timeout = sniff_timeout
@@ -120,8 +134,6 @@ def passive_scan_for_ssids(interface, sniff_timeout, sniff_count):
 
         if debug_mode:
             print(f"Sniffing on Channel {channel} for {channel_sniff_timeout}s, capturing {channel_sniff_count} packets")
-
-        time.sleep(0.2)  # Slight delay to ensure the adapter is ready
 
         # Capture packets to detect SSIDs
         try:
@@ -141,30 +153,34 @@ def passive_scan_for_ssids(interface, sniff_timeout, sniff_count):
                     radiotap = packet[RadioTap]
                     signal = radiotap.dBm_AntSignal if hasattr(radiotap, 'dBm_AntSignal') else -100
                     freq = radiotap.ChannelFrequency if hasattr(radiotap, 'ChannelFrequency') else None
-                    channel = freq_to_channel(freq) if freq else None
+                    channel_from_packet = freq_to_channel(freq) if freq else None
                     if debug_mode:
-                        print(f"Packet Frequency: {freq}, Mapped Channel: {channel}")
+                        print(f"Packet Frequency: {freq}, Mapped Channel: {channel_from_packet}")
                 else:
                     signal = -100
-                    channel = None
+                    channel_from_packet = None
                     if debug_mode:
                         print("Packet does not have RadioTap layer; cannot extract frequency and signal strength.")
-                if ssid and channel:
-                    active_channels.add(channel)
+                if ssid and channel_from_packet:
+                    active_channels.add(channel_from_packet)
                     bssid_ssid_map[bssid] = ssid
-                    ssid_channels[ssid].add(channel)
+                    ssid_channels[ssid].add(channel_from_packet)
                     ssid_bssids[ssid].add(bssid)  # Track BSSID (AP) per SSID
                     # Update signal strength only if the new signal is stronger
-                    if signal > bssid_signal_strength[ssid].get(channel, -100):
-                        bssid_signal_strength[ssid][channel] = signal
+                    if signal > bssid_signal_strength[ssid].get(channel_from_packet, -100):
+                        bssid_signal_strength[ssid][channel_from_packet] = signal
                         if debug_mode:
-                            print(f"Updated signal strength for SSID '{ssid}' on channel {channel}: {signal} dBm")
+                            print(f"Updated signal strength for SSID '{ssid}' on channel {channel_from_packet}: {signal} dBm")
                     if debug_mode:
-                        print(f"Found SSID '{ssid}' (BSSID: {bssid}) on channel {channel} with signal {signal} dBm")
+                        print(f"Found SSID '{ssid}' (BSSID: {bssid}) on channel {channel_from_packet} with signal {signal} dBm")
                 elif debug_mode:
                     print(f"Failed to extract channel information for SSID '{ssid}'")
         if debug_mode:
             print(f"Active channels detected so far: {sorted(active_channels)}")
+
+    # Resume the sniffing thread
+    sniffing_event.set()
+
     if debug_mode:
         print(f"Total active channels detected: {sorted(active_channels)}")
     return list(active_channels)
@@ -282,7 +298,8 @@ def display_results():
 def sniff_packets(sniff_timeout, sniff_count):
     global sniffing
     while sniffing:
-        # Retry logic for socket failures
+        # Wait for the sniffing_event to be set
+        sniffing_event.wait()
         try:
             with channel_lock:
                 sniff(iface=interface, prn=packet_handler, timeout=sniff_timeout, count=sniff_count, store=0)
@@ -358,6 +375,7 @@ def main():
         print("\nKeyboardInterrupt received. Exiting gracefully...")
 
     sniffing = False
+    sniffing_event.set()  # Ensure the sniffing thread is not blocked
     if sniff_thread and sniff_thread.is_alive():
         sniff_thread.join()
     print("\nFinal Results:")
