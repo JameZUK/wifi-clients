@@ -235,7 +235,8 @@ def passive_scan_for_ssids(interface, sniff_timeout, sniff_count):
     return list(active_channels)
 
 # Function to switch WiFi channels in main scan
-def hop_channel(interface, channels, sleep_time):
+def hop_channel(interface, channels, sleep_time, band_switch_delay):
+    previous_band = None  # Keep track of the previous channel's band
     for channel in channels:
         if not sniffing:
             break
@@ -252,8 +253,25 @@ def hop_channel(interface, channels, sleep_time):
             if debug_mode:
                 print(f"Set interface {interface} to channel {channel} successfully.")
 
+        # Determine the current band
+        if 1 <= channel <= 14:
+            current_band = '2.4 GHz'
+        else:
+            current_band = '5 GHz'
+
+        # Check if the band has changed
+        if previous_band and current_band != previous_band:
+            # Band has changed; wait for band_switch_delay
+            if debug_mode:
+                print(f"Band changed from {previous_band} to {current_band}. Waiting for {band_switch_delay} seconds.")
+            time.sleep(band_switch_delay)
+        else:
+            # Band has not changed; wait for regular sleep_time
+            time.sleep(sleep_time)
+
+        previous_band = current_band  # Update previous_band
+
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Scanning on Channel {channel}")
-        time.sleep(sleep_time)  # Adjustable sleep time for faster scanning
 
 # Function to handle packet processing and track clients
 def packet_handler(packet):
@@ -368,6 +386,7 @@ def main():
     parser.add_argument('--sniff_timeout', type=float, default=1.5, help='Timeout in seconds for sniffing packets during passive scan')
     parser.add_argument('--sniff_count', type=int, default=100, help='Number of packets to capture during passive scan')
     parser.add_argument('--hop_sleep', type=float, default=1.0, help='Sleep time in seconds after hopping to a new channel')
+    parser.add_argument('--band_switch_delay', type=float, default=5.0, help='Delay in seconds when switching between 2.4 GHz and 5 GHz bands')
     args = parser.parse_args()
 
     global debug_mode, sniffing, interface, selected_channels
@@ -379,6 +398,7 @@ def main():
     sniff_timeout = args.sniff_timeout
     sniff_count = args.sniff_count
     hop_sleep = args.hop_sleep
+    band_switch_delay = args.band_switch_delay
 
     # Configure logging to suppress Scapy warnings if debug_mode is off
     if not debug_mode:
@@ -420,7 +440,7 @@ def main():
                 active_channels = selected_channels.copy()  # Fallback to pre-selected channels if none detected
             if debug_mode:
                 print(f"Active channels to scan: {active_channels}")
-            hop_channel(interface, active_channels, hop_sleep)
+            hop_channel(interface, active_channels, hop_sleep, band_switch_delay)
             display_results()
             time.sleep(interval)
     except KeyboardInterrupt:
