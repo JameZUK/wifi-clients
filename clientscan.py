@@ -40,18 +40,21 @@ def freq_to_channel(freq):
     else:
         return None
 
-# Updated get_supported_channels function
+# Corrected get_supported_channels function
 def get_supported_channels(interface):
     global selected_channels
     try:
         # Get the wireless interface
         iface = pyw.getcard(interface)
-        # Get the list of supported channels and frequencies
-        chs = pyw.devchs(iface)
+        # Get the list of supported channels (as integers)
+        chs = pyw.devchs(iface)  # Returns a list of channel numbers
         selected_channels = []
-        for ch in chs:
-            channel = ch[0]
-            freq = ch[1]
+        for channel in chs:
+            freq = channels.ch2rf(channel)  # Get the frequency corresponding to the channel
+            if freq is None:
+                if debug_mode:
+                    print(f"Could not get frequency for Channel {channel}")
+                continue
             if debug_mode:
                 print(f"Detected Channel: {channel}, Frequency: {freq} MHz")
             # Include standard Wi-Fi channels in 2.4 GHz and 5 GHz bands
