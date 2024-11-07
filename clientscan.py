@@ -160,7 +160,7 @@ def sniff_packets():
             # Close and reinitialize the socket for each sniffing attempt
             if sniff_socket:
                 sniff_socket.close()
-            sniff_socket = L2ListenSocket(iface=interface)
+            sniff_socket = conf.L2listen(iface=interface)
             
             # Capture packets with the reinitialized socket
             with channel_lock:
