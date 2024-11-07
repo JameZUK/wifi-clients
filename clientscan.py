@@ -194,3 +194,16 @@ def main():
             if not active_channels:
                 active_channels = selected_channels  # Fallback to pre-selected channels if none detected
             hop_channel(interface, active_channels)
+            display_results()
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print("\nKeyboardInterrupt received. Exiting gracefully...")
+
+    sniffing = False
+    if sniff_thread and sniff_thread.is_alive():
+        sniff_thread.join()
+    print("\nFinal Results:")
+    display_results()
+
+if __name__ == "__main__":
+    main()
