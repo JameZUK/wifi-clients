@@ -14,7 +14,7 @@ from datetime import datetime
 # Dictionaries for SSID and client tracking
 bssid_ssid_map = {}
 network_clients = defaultdict(set)
-bssid_signal_strength = {}
+bssid_signal_strength = defaultdict(lambda: defaultdict(int))  # Track signal by SSID and channel
 ssid_channels = defaultdict(set)  # Track channels for each SSID
 
 # Global variables to control scanning and debugging
@@ -59,13 +59,14 @@ def passive_scan_for_ssids(interface):
             if packet.haslayer(Dot11Beacon) or packet.haslayer(Dot11ProbeResp):
                 ssid = packet[Dot11Elt].info.decode('utf-8', errors='ignore')
                 bssid = packet[Dot11].addr2
+                signal = packet.dBm_AntSignal if hasattr(packet, 'dBm_AntSignal') else -100  # Default low if not detected
                 if ssid:
                     active_channels.add(channel)
                     bssid_ssid_map[bssid] = ssid
-                    bssid_signal_strength[bssid] = packet.dBm_AntSignal if hasattr(packet, 'dBm_AntSignal') else 'N/A'
-                    ssid_channels[ssid].add(channel)  # Track channels per SSID
+                    ssid_channels[ssid].add(channel)  # Track all channels the SSID appears on
+                    bssid_signal_strength[ssid][channel] = max(bssid_signal_strength[ssid][channel], signal)
                     if debug_mode:
-                        print(f"Found SSID '{ssid}' on channel {channel}")
+                        print(f"Found SSID '{ssid}' on channel {channel} with signal {signal} dBm")
     if debug_mode:
         print(f"Active channels detected: {active_channels}")
     return list(active_channels)
@@ -88,9 +89,9 @@ def packet_handler(packet):
     if packet.haslayer(Dot11Beacon) or packet.haslayer(Dot11ProbeResp):
         ssid = packet[Dot11Elt].info.decode('utf-8', errors='ignore')
         bssid = packet[Dot11].addr2
-        signal = packet.dBm_AntSignal if hasattr(packet, 'dBm_AntSignal') else 'N/A'
+        signal = packet.dBm_AntSignal if hasattr(packet, 'dBm_AntSignal') else -100
         bssid_ssid_map[bssid] = ssid
-        bssid_signal_strength[bssid] = signal
+        bssid_signal_strength[ssid][packet[Dot11].Channel] = signal
 
     # Process Data frames to find clients associated with APs
     if packet.haslayer(Dot11) and packet.type == 2:  # Data frame
@@ -120,9 +121,10 @@ def stop_sniffing(signum, frame):
 def display_results():
     print("\nCurrent Results:")
     for ssid, clients in network_clients.items():
-        channels = sorted(ssid_channels[ssid])  # Retrieve channels for this SSID
-        signal_strength = bssid_signal_strength.get(next(iter(clients), None), 'N/A')
-        print(f"SSID: {ssid}, Channels: {', '.join(map(str, channels))}, Clients: {len(clients)}, Signal: {signal_strength}")
+        channels = sorted(ssid_channels[ssid])
+        primary_channel = max(bssid_signal_strength[ssid], key=bssid_signal_strength[ssid].get)  # Channel with strongest signal
+        signal_strength = bssid_signal_strength[ssid][primary_channel]
+        print(f"SSID: {ssid}, Primary Channel: {primary_channel}, Other Channels: {', '.join(map(str, channels))}, Clients: {len(clients)}, Signal: {signal_strength} dBm")
 
 def main():
     parser = argparse.ArgumentParser(description="WiFi Scanner to count clients per SSID.")
