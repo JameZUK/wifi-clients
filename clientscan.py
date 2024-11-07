@@ -25,19 +25,19 @@ selected_channels = []  # To be populated dynamically
 channel_lock = threading.Lock()  # Lock to coordinate channel switching
 interface = None  # Global variable to hold interface name
 
-# Function to retrieve supported channels using PyRIC
+# Corrected function to retrieve supported channels using PyRIC
 def get_supported_channels(interface):
     global selected_channels
     try:
         # Get the wireless interface
         iface = pyw.getcard(interface)
         # Get the list of supported frequencies
-        frequencies = pyw.freqs(iface)
+        frequencies = pyw.devfreqs(iface)
         # Map frequencies to channels
         for freq in frequencies:
             channel = pyw.chfromfreq(freq)
             # Include channels in 2.4 GHz and 5 GHz bands
-            if 2412 <= freq <= 2484 or 5180 <= freq <= 5825:
+            if 1 <= channel <= 14 or 36 <= channel <= 165:
                 selected_channels.append(channel)
         # Remove duplicates and sort
         selected_channels = sorted(set(selected_channels))
@@ -204,7 +204,7 @@ def sniff_packets(sniff_timeout, sniff_count):
 
 def main():
     parser = argparse.ArgumentParser(description="WiFi Scanner to count clients per SSID.")
-    parser.add_argument('-i', '--interface', required=True, help='Wireless interface in monitor mode (e.g., wlan0mon)')
+    parser.add_argument('-i', '--interface', required=True, help='Wireless interface in monitor mode (e.g., wlan0)')
     parser.add_argument('-t', '--interval', type=int, default=5, help='Interval in seconds between output updates')
     parser.add_argument('--scan_interval', type=int, default=30, help='Interval in seconds for rescanning SSIDs')
     parser.add_argument('--debug', action='store_true', help='Enable debug output')
