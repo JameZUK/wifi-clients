@@ -61,7 +61,13 @@ def passive_scan_for_ssids(interface):
         time.sleep(2)  # Ensure stability before resuming sniffing
 
         # Capture packets to detect SSIDs
-        packets = sniff(iface=interface, timeout=2, count=50, store=True)
+        try:
+            packets = sniff(iface=interface, timeout=2, count=50, store=True)
+        except Exception as e:
+            if debug_mode:
+                print(f"Error during sniffing: {e}")
+            continue  # Skip to the next channel
+
         for packet in packets:
             if packet.haslayer(Dot11Beacon) or packet.haslayer(Dot11ProbeResp):
                 ssid = packet[Dot11Elt].info.decode('utf-8', errors='ignore')
@@ -157,7 +163,8 @@ def sniff_packets():
             with channel_lock:
                 sniff(iface=interface, prn=packet_handler, timeout=5, store=0)
         except Exception as e:
-            print(f"Socket error: {e}. Retrying in 5 seconds...")
+            if debug_mode:  # Only print the error if debug mode is enabled
+                print(f"Socket error: {e}. Retrying in 5 seconds...")
             time.sleep(5)
 
 def main():
@@ -179,6 +186,9 @@ def main():
 
     # Set interface to monitor mode
     set_monitor_mode(interface)
+
+    # Get supported channels from the interface (optional, since selected_channels is predefined)
+    get_supported_channels(interface)
 
     # Register signal handler for Ctrl+C
     signal.signal(signal.SIGINT, stop_sniffing)
