@@ -15,6 +15,7 @@ from datetime import datetime
 bssid_ssid_map = {}
 network_clients = defaultdict(set)
 bssid_signal_strength = {}
+ssid_channels = defaultdict(set)  # Track channels for each SSID
 
 # Global variables to control scanning and debugging
 sniffing = True
@@ -62,6 +63,7 @@ def passive_scan_for_ssids(interface):
                     active_channels.add(channel)
                     bssid_ssid_map[bssid] = ssid
                     bssid_signal_strength[bssid] = packet.dBm_AntSignal if hasattr(packet, 'dBm_AntSignal') else 'N/A'
+                    ssid_channels[ssid].add(channel)  # Track channels per SSID
                     if debug_mode:
                         print(f"Found SSID '{ssid}' on channel {channel}")
     if debug_mode:
@@ -118,13 +120,15 @@ def stop_sniffing(signum, frame):
 def display_results():
     print("\nCurrent Results:")
     for ssid, clients in network_clients.items():
+        channels = sorted(ssid_channels[ssid])  # Retrieve channels for this SSID
         signal_strength = bssid_signal_strength.get(next(iter(clients), None), 'N/A')
-        print(f"SSID: {ssid}, Clients: {len(clients)}, Signal: {signal_strength}")
+        print(f"SSID: {ssid}, Channels: {', '.join(map(str, channels))}, Clients: {len(clients)}, Signal: {signal_strength}")
 
 def main():
     parser = argparse.ArgumentParser(description="WiFi Scanner to count clients per SSID.")
     parser.add_argument('-i', '--interface', required=True, help='Wireless interface in monitor mode (e.g., wlan0mon)')
     parser.add_argument('-t', '--interval', type=int, default=5, help='Interval in seconds between output updates')
+    parser.add_argument('--scan_interval', type=int, default=30, help='Interval in seconds for rescanning SSIDs')
     parser.add_argument('--debug', action='store_true', help='Enable debug output')
     args = parser.parse_args()
 
@@ -133,6 +137,7 @@ def main():
 
     interface = args.interface
     interval = args.interval
+    scan_interval = args.scan_interval  # SSID scan interval
 
     print(f"Starting WiFi scan on interface {interface}. Press Ctrl+C to stop.")
 
@@ -154,12 +159,17 @@ def main():
     sniff_thread.start()
 
     # Periodically update the list of active channels based on available SSIDs
+    last_scan_time = 0
     while sniffing:
-        active_channels = passive_scan_for_ssids(interface)
+        current_time = time.time()
+        if current_time - last_scan_time >= scan_interval:
+            active_channels = passive_scan_for_ssids(interface)
+            last_scan_time = current_time
         if not active_channels:
             active_channels = available_channels  # Fallback to all channels if none detected
         hop_channel(interface, active_channels)
         display_results()
+        time.sleep(interval)
 
     sniff_thread.join()
     print("\nFinal Results:")
