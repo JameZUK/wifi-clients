@@ -19,7 +19,21 @@ bssid_signal_strength = {}
 # Global variables to control scanning and debugging
 sniffing = True
 debug_mode = False
-available_channels = list(range(1, 12))  # Standard 2.4 GHz channels
+available_channels = []
+
+# Function to retrieve supported channels from the WiFi interface
+def get_supported_channels(interface):
+    global available_channels
+    try:
+        # Run iwlist to get channel information
+        iwlist_output = subprocess.check_output(['iwlist', interface, 'channel'], text=True)
+        # Find all channel numbers in the iwlist output
+        available_channels = re.findall(r'Channel (\d+)', iwlist_output)
+        available_channels = list(map(int, available_channels))  # Convert to integers
+        print(f"Supported channels for {interface}: {available_channels}")
+    except subprocess.CalledProcessError:
+        print(f"Failed to retrieve channels for interface {interface}. Ensure it's in monitor mode.")
+        sys.exit(1)
 
 # Function to initialize interface in monitor mode
 def set_monitor_mode(interface):
@@ -124,6 +138,9 @@ def main():
 
     # Set interface to monitor mode
     set_monitor_mode(interface)
+
+    # Get supported channels from the interface
+    get_supported_channels(interface)
 
     # Register signal handler for Ctrl+C
     signal.signal(signal.SIGINT, stop_sniffing)
