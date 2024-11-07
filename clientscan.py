@@ -11,6 +11,7 @@ from datetime import datetime
 import logging
 import pyric
 import pyric.pyw as pyw
+from pyric.utils import channels  # Import channels module
 
 # Dictionaries for SSID and client tracking
 bssid_ssid_map = {}
@@ -35,9 +36,9 @@ def get_supported_channels(interface):
         frequencies = pyw.devfreqs(iface)
         # Map frequencies to channels
         for freq in frequencies:
-            channel = pyw.chfromfreq(freq)
+            channel = channels.rf2ch(freq)
             # Include channels in 2.4 GHz and 5 GHz bands
-            if 1 <= channel <= 14 or 36 <= channel <= 165:
+            if channel and (1 <= channel <= 14 or 36 <= channel <= 165):
                 selected_channels.append(channel)
         # Remove duplicates and sort
         selected_channels = sorted(set(selected_channels))
@@ -45,6 +46,8 @@ def get_supported_channels(interface):
     except pyric.error as e:
         print(f"Failed to retrieve channels for interface {interface}: {e}")
         sys.exit(1)
+
+# Rest of the code remains the same...
 
 # Function to initialize interface in monitor mode
 def set_monitor_mode(interface):
@@ -111,6 +114,8 @@ def passive_scan_for_ssids(interface, sniff_timeout, sniff_count):
     if debug_mode:
         print(f"Active channels detected: {active_channels}")
     return list(active_channels)
+
+# The rest of the functions remain the same...
 
 # Function to switch WiFi channels in main scan
 def hop_channel(interface, channels, sleep_time):
