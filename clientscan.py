@@ -63,6 +63,9 @@ def passive_scan_for_ssids(interface):
         for packet in packets:
             if packet.haslayer(Dot11Beacon) or packet.haslayer(Dot11ProbeResp):
                 ssid = packet[Dot11Elt].info.decode('utf-8', errors='ignore')
+                # Replace empty SSID with <HIDDEN>
+                if not ssid:
+                    ssid = "<HIDDEN>"
                 bssid = packet[Dot11].addr2
                 signal = packet.dBm_AntSignal if hasattr(packet, 'dBm_AntSignal') else -100  # Default low if not detected
                 if ssid:
@@ -91,7 +94,7 @@ def hop_channel(interface, channels):
         # Switch to the next channel
         subprocess.call(['iwconfig', interface, 'channel', str(channel)])
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Scanning on Channel {channel}")
-        time.sleep(1)  # Slightly longer dwell time for stability
+        time.sleep(2)  # Increased dwell time for stability
 
         # Restart sniffing on the new channel
         sniffing = True
@@ -110,6 +113,9 @@ def packet_handler(packet):
     # Process SSID information from Beacon/Probe Response frames
     if packet.haslayer(Dot11Beacon) or packet.haslayer(Dot11ProbeResp):
         ssid = packet[Dot11Elt].info.decode('utf-8', errors='ignore')
+        # Replace empty SSID with <HIDDEN>
+        if not ssid:
+            ssid = "<HIDDEN>"
         bssid = packet[Dot11].addr2
         signal = packet.dBm_AntSignal if hasattr(packet, 'dBm_AntSignal') else -100
         bssid_ssid_map[bssid] = ssid
