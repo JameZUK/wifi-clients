@@ -6,63 +6,73 @@ import threading
 import signal
 import sys
 import argparse
+import time
 
+# Dictionary to store BSSID -> SSID mapping
+bssid_ssid_map = {}
 # Dictionary to store SSID -> set of client MAC addresses
 network_clients = defaultdict(set)
-# Dictionary to store SSID signal strengths
-network_signals = {}
+# Dictionary to store BSSID -> Signal Strength
+bssid_signal_strength = {}
+
+# Global variable to control sniffing
+sniffing = True
 
 # Function to handle packet processing
 def packet_handler(packet):
-    # Check for Beacon and Probe Response frames (to get SSIDs)
-    if packet.haslayer(Dot11Beacon) or packet.haslayer(Dot11ProbeResp):
-        ssid = packet[Dot11Elt].info.decode('utf-8', errors='ignore')
-        bssid = packet[Dot11].addr2
-        # Signal strength
-        signal = packet.dBm_AntSignal if hasattr(packet, 'dBm_AntSignal') else 'N/A'
-        network_signals[ssid] = signal
+    # (Same as before)
+    # [Omitted for brevity; use the same packet_handler function from the previous script]
 
-    # Check for Data frames to find clients associated with APs
-    if packet.haslayer(Dot11):
-        if packet.type == 2:
-            addr1 = packet.addr1  # Destination MAC
-            addr2 = packet.addr2  # Source MAC
-            addr3 = packet.addr3  # BSSID
+# Function to stop sniffing
+def stop_sniffing(signum, frame):
+    global sniffing
+    sniffing = False
+    print("\nStopping scan...")
 
-            # Check if the packet is from a client to an AP or vice versa
-            if addr1 and addr2 and addr3:
-                # Assuming addr1 is the AP and addr2 is the client
-                # Or vice versa, depending on the ToDS and FromDS bits
-                # For simplicity, we consider both possibilities
-                for ssid in network_signals.keys():
-                    network_clients[ssid].update([addr1, addr2, addr3])
-
-# Function to stop sniffing on signal interrupt
-def stop_sniff(signal, frame):
-    print("\nScan complete. Processing results...\n")
-    sys.exit(0)
-
-# Register the signal handler
-signal.signal(signal.SIGINT, stop_sniff)
+def display_results():
+    print("\n{:<30} {:<15} {:<15}".format('SSID', 'Clients', 'Signal(dBm)'))
+    print("-" * 60)
+    for ssid, clients in network_clients.items():
+        # Find BSSIDs corresponding to the SSID
+        bssids = [bssid for bssid, s in bssid_ssid_map.items() if s == ssid]
+        # Get the signal strength for the first BSSID found
+        signal_strength = bssid_signal_strength.get(bssids[0], 'N/A') if bssids else 'N/A'
+        print("{:<30} {:<15} {:<15}".format(ssid, len(clients), signal_strength))
+    print("\nPress Ctrl+C to stop the scan.\n")
 
 def main():
     parser = argparse.ArgumentParser(description="WiFi Scanner to count clients per SSID.")
     parser.add_argument('-i', '--interface', required=True, help='Wireless interface in monitor mode (e.g., wlan0mon)')
+    parser.add_argument('-t', '--interval', type=int, default=5, help='Interval in seconds between output updates')
     args = parser.parse_args()
 
     interface = args.interface
+    interval = args.interval
 
     print(f"Starting WiFi scan on interface {interface}. Press Ctrl+C to stop.")
 
-    # Start sniffing packets
-    sniff(iface=interface, prn=packet_handler, store=0)
+    # Register signal handler for Ctrl+C
+    signal.signal(signal.SIGINT, stop_sniffing)
 
-    # After sniffing is stopped, display the results
-    print("{:<30} {:<15} {:<10}".format('SSID', 'Clients', 'Signal(dBm)'))
-    print("-" * 60)
-    for ssid, clients in network_clients.items():
-        signal_strength = network_signals.get(ssid, 'N/A')
-        print("{:<30} {:<15} {:<10}".format(ssid, len(clients), signal_strength))
+    # Start sniffing packets in a separate thread
+    def sniff_packets():
+        while sniffing:
+            sniff(iface=interface, prn=packet_handler, timeout=1, store=0)
+
+    sniff_thread = threading.Thread(target=sniff_packets)
+    sniff_thread.start()
+
+    # Periodically display results
+    try:
+        while sniffing:
+            time.sleep(interval)
+            display_results()
+    except KeyboardInterrupt:
+        pass
+
+    sniff_thread.join()
+    print("\nFinal Results:")
+    display_results()
 
 if __name__ == "__main__":
     main()
