@@ -18,6 +18,7 @@ bssid_ssid_map = {}
 network_clients = defaultdict(set)
 bssid_signal_strength = defaultdict(lambda: defaultdict(int))  # Track signal by SSID and channel
 ssid_channels = defaultdict(set)  # Track channels for each SSID
+ssid_bssids = defaultdict(set)  # Track BSSIDs (APs) per SSID
 
 # Global variables to control scanning and debugging
 sniffing = True
@@ -118,6 +119,7 @@ def passive_scan_for_ssids(interface, sniff_timeout, sniff_count):
                     active_channels.add(channel)
                     bssid_ssid_map[bssid] = ssid
                     ssid_channels[ssid].add(channel)
+                    ssid_bssids[ssid].add(bssid)  # Track BSSID (AP) per SSID
                     # Update signal strength only if the new signal is stronger
                     if signal > bssid_signal_strength[ssid].get(channel, -100):
                         bssid_signal_strength[ssid][channel] = signal
@@ -170,6 +172,7 @@ def packet_handler(packet):
             signal = -100
             channel = None
         bssid_ssid_map[bssid] = ssid
+        ssid_bssids[ssid].add(bssid)  # Track BSSID (AP) per SSID
         if channel:
             ssid_channels[ssid].add(channel)
             # Update signal strength only if the new signal is stronger
@@ -212,6 +215,7 @@ def display_results():
     for ssid in all_ssids:
         clients = network_clients.get(ssid, set())
         channels = sorted(ssid_channels[ssid])
+        ap_count = len(ssid_bssids.get(ssid, set()))  # Get number of APs
         if bssid_signal_strength[ssid]:  # Ensure there is signal strength data
             primary_channel = max(bssid_signal_strength[ssid], key=lambda ch: bssid_signal_strength[ssid][ch])
             signal_strength = bssid_signal_strength[ssid][primary_channel]
@@ -219,7 +223,7 @@ def display_results():
             primary_channel = "N/A"
             signal_strength = "N/A"
 
-        print(f"SSID: {ssid}, Primary Channel: {primary_channel}, Other Channels: {', '.join(map(str, channels))}, Clients: {len(clients)}, Signal: {signal_strength} dBm")
+        print(f"SSID: {ssid}, APs: {ap_count}, Primary Channel: {primary_channel}, Other Channels: {', '.join(map(str, channels))}, Clients: {len(clients)}, Signal: {signal_strength} dBm")
 
 def sniff_packets(sniff_timeout, sniff_count):
     global sniffing
@@ -234,7 +238,7 @@ def sniff_packets(sniff_timeout, sniff_count):
             time.sleep(5)
 
 def main():
-    parser = argparse.ArgumentParser(description="WiFi Scanner to count clients per SSID.")
+    parser = argparse.ArgumentParser(description="WiFi Scanner to count clients per SSID and AP.")
     parser.add_argument('-i', '--interface', required=True, help='Wireless interface in monitor mode (e.g., wlan0)')
     parser.add_argument('-t', '--interval', type=int, default=5, help='Interval in seconds between output updates')
     parser.add_argument('--scan_interval', type=int, default=30, help='Interval in seconds for rescanning SSIDs')
