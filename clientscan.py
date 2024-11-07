@@ -12,7 +12,7 @@ import logging
 import pyric
 import pyric.pyw as pyw
 from pyric.utils import channels  # Import channels module
-import subprocess  # For potential alternative channel setting
+import errno  # Import errno module
 
 # Dictionaries for SSID and client tracking
 bssid_ssid_map = {}
@@ -42,6 +42,32 @@ def freq_to_channel(freq):
         return (freq - 5000) // 5
     else:
         return None
+
+# Helper function to set channel with retries
+def set_channel_with_retries(iface, channel, max_retries=5, sleep_time=0.01):
+    retry_count = 0
+    while retry_count < max_retries:
+        try:
+            pyw.chset(iface, channel)
+            current_channel = pyw.chget(iface)
+            if current_channel == channel:
+                return True  # Successfully set the channel
+            else:
+                if debug_mode:
+                    print(f"Warning: Interface channel is {current_channel}, expected {channel}")
+                time.sleep(sleep_time)
+                retry_count += 1
+        except pyric.error as e:
+            if e.errno in [errno.ENOBUFS, errno.EAGAIN]:
+                if debug_mode:
+                    print(f"Channel set failed with errno {e.errno} ({e.strerror}), retrying after sleep")
+                time.sleep(sleep_time)
+                retry_count += 1
+            else:
+                print(f"Failed to set channel {channel} on interface {interface}: {e}")
+                return False
+    print(f"Failed to set channel {channel} on interface {interface} after {max_retries} retries")
+    return False
 
 # Corrected get_supported_channels function
 def get_supported_channels(interface):
@@ -105,20 +131,12 @@ def passive_scan_for_ssids(interface, sniff_timeout, sniff_count):
 
         # Switch to the channel, with lock to prevent socket errors during sniffing
         with channel_lock:
-            try:
-                iface = pyw.getcard(interface)
-                pyw.chset(iface, channel)
-                # Verify that the channel has been set
-                current_channel = pyw.chget(iface)
-                if debug_mode:
-                    print(f"Set interface {interface} to Channel {channel}")
-                    print(f"Current channel is {current_channel}")
-                if current_channel != channel:
-                    print(f"Warning: Interface channel is {current_channel}, expected {channel}")
-                    continue  # Skip to the next channel if channel setting failed
-            except pyric.error as e:
-                print(f"Failed to set channel {channel} on interface {interface}: {e}")
-                continue
+            iface = pyw.getcard(interface)
+            success = set_channel_with_retries(iface, channel)
+            if not success:
+                continue  # Skip to next channel
+            if debug_mode:
+                print(f"Successfully set interface {interface} to Channel {channel}")
 
         time.sleep(0.5)  # Slight delay to ensure the adapter is ready
 
@@ -192,14 +210,13 @@ def hop_channel(interface, channels, sleep_time):
             break
 
         with channel_lock:
-            try:
-                iface = pyw.getcard(interface)
-                pyw.chset(iface, channel)
-                if debug_mode:
-                    print(f"Set interface {interface} to channel {channel} successfully.")
-            except pyric.error as e:
-                print(f"Failed to set channel {channel} on interface {interface}: {e}")
-                continue
+            iface = pyw.getcard(interface)
+            success = set_channel_with_retries(iface, channel)
+            if not success:
+                continue  # Skip to next channel
+            if debug_mode:
+                print(f"Set interface {interface} to channel {channel} successfully.")
+
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Scanning on Channel {channel}")
         time.sleep(sleep_time)  # Adjustable sleep time for faster scanning
 
