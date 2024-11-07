@@ -107,11 +107,25 @@ def passive_scan_for_ssids(interface, sniff_timeout, sniff_count):
             except pyric.error as e:
                 print(f"Failed to set channel {channel} on interface {interface}: {e}")
                 continue
-        time.sleep(0.5)  # Reduced sleep for faster scanning
+
+        # Determine if the channel is 2.4 GHz or 5 GHz
+        if 1 <= channel <= 14:
+            # 2.4 GHz channel
+            channel_sniff_timeout = sniff_timeout
+            channel_sniff_count = sniff_count
+        else:
+            # 5 GHz channel
+            channel_sniff_timeout = sniff_timeout * 2  # Increase timeout for 5 GHz
+            channel_sniff_count = sniff_count * 2      # Increase packet count for 5 GHz
+
+        if debug_mode:
+            print(f"Sniffing on Channel {channel} for {channel_sniff_timeout}s, capturing {channel_sniff_count} packets")
+
+        time.sleep(0.2)  # Slight delay to ensure the adapter is ready
 
         # Capture packets to detect SSIDs
         try:
-            packets = sniff(iface=interface, timeout=sniff_timeout, count=sniff_count, store=True)
+            packets = sniff(iface=interface, timeout=channel_sniff_timeout, count=channel_sniff_count, store=True)
             if debug_mode:
                 print(f"Captured {len(packets)} packets on Channel {channel}")
         except Exception as e:
@@ -282,8 +296,8 @@ def main():
     parser.add_argument('-t', '--interval', type=int, default=5, help='Interval in seconds between output updates')
     parser.add_argument('--scan_interval', type=int, default=30, help='Interval in seconds for rescanning SSIDs')
     parser.add_argument('--debug', action='store_true', help='Enable debug output')
-    parser.add_argument('--sniff_timeout', type=float, default=1.0, help='Timeout in seconds for sniffing packets during passive scan')
-    parser.add_argument('--sniff_count', type=int, default=50, help='Number of packets to capture during passive scan')
+    parser.add_argument('--sniff_timeout', type=float, default=1.5, help='Timeout in seconds for sniffing packets during passive scan')
+    parser.add_argument('--sniff_count', type=int, default=100, help='Number of packets to capture during passive scan')
     parser.add_argument('--hop_sleep', type=float, default=0.5, help='Sleep time in seconds after hopping to a new channel')
     args = parser.parse_args()
 
