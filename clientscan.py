@@ -23,7 +23,6 @@ debug_mode = False
 selected_channels = [1, 6, 11, 13]  # Reduced set for testing stability
 channel_lock = threading.Lock()  # Lock to coordinate channel switching
 interface = None  # Global variable to hold interface name
-sniff_socket = None  # To manage Scapy's sniffing socket
 
 # Function to retrieve supported channels from the WiFi interface
 def get_supported_channels(interface):
@@ -82,17 +81,11 @@ def passive_scan_for_ssids(interface):
         print(f"Active channels detected: {active_channels}")
     return list(active_channels)
 
-# Function to switch WiFi channels in main scan and reset socket
+# Function to switch WiFi channels in main scan
 def hop_channel(interface, channels):
-    global sniff_socket
     for channel in channels:
         if not sniffing:
             break
-
-        # Stop the existing socket before switching channels
-        if sniff_socket:
-            sniff_socket.close()
-            sniff_socket = None
 
         # Switch to the next channel with lock to prevent socket errors during sniffing
         with channel_lock:
@@ -139,11 +132,9 @@ def packet_handler(packet):
 
 # Function to stop sniffing
 def stop_sniffing(signum, frame):
-    global sniffing, sniff_socket
+    global sniffing
     sniffing = False
     print("\nStopping scan...")
-    if sniff_socket:
-        sniff_socket.close()
 
 def display_results():
     print("\nCurrent Results:")
@@ -154,17 +145,12 @@ def display_results():
         print(f"SSID: {ssid}, Primary Channel: {primary_channel}, Other Channels: {', '.join(map(str, channels))}, Clients: {len(clients)}, Signal: {signal_strength} dBm")
 
 def sniff_packets():
-    global sniffing, sniff_socket
+    global sniffing
     while sniffing:
+        # Retry logic for socket failures
         try:
-            # Close and reinitialize the socket for each sniffing attempt
-            if sniff_socket:
-                sniff_socket.close()
-            sniff_socket = conf.L2listen(iface=interface)
-            
-            # Capture packets with the reinitialized socket
             with channel_lock:
-                sniff(opened_socket=sniff_socket, prn=packet_handler, timeout=5, store=0)
+                sniff(iface=interface, prn=packet_handler, timeout=5, store=0)
         except Exception as e:
             print(f"Socket error: {e}. Retrying in 5 seconds...")
             time.sleep(5)
@@ -213,10 +199,7 @@ def main():
     except KeyboardInterrupt:
         print("\nKeyboardInterrupt received. Exiting gracefully...")
 
-    # Ensure all threads and sockets are properly closed
     sniffing = False
-    if sniff_socket:
-        sniff_socket.close()
     if sniff_thread and sniff_thread.is_alive():
         sniff_thread.join()
     print("\nFinal Results:")
