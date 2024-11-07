@@ -9,7 +9,6 @@ import argparse
 import time
 import subprocess
 import re
-import logging
 from datetime import datetime
 
 # Dictionary to store BSSID -> SSID mapping
@@ -24,16 +23,6 @@ sniffing = True
 debug_mode = False
 channels = []
 
-# Initialize logging
-def setup_logging():
-    logging.basicConfig(
-        filename="wifi_scan.log",
-        level=logging.INFO,
-        format="%(asctime)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
-    )
-    logging.info("Starting WiFi scanner...")
-
 # Function to get supported channels from the interface
 def get_supported_channels(interface):
     global channels
@@ -45,8 +34,6 @@ def get_supported_channels(interface):
         channels = list(map(int, channels))  # Convert to integers
         if debug_mode:
             print(f"Supported channels: {channels}")
-        else:
-            logging.info(f"Supported channels: {channels}")
     except subprocess.CalledProcessError:
         print(f"Failed to retrieve channels for interface {interface}. Ensure it's in monitor mode.")
         sys.exit(1)
@@ -57,25 +44,15 @@ def hop_channel(interface):
         if not sniffing:  # Stop hopping if sniffing has stopped
             break
         subprocess.call(['iwconfig', interface, 'channel', str(channel)])
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        if debug_mode:
-            print(f"Switched to channel {channel}")
-        else:
-            logging.info(f"Switched to channel {channel} at {timestamp}")
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        print(f"[{timestamp}] Scanning on Channel {channel}")
         time.sleep(1)  # Pause on each channel for 1 second
 
 # Function to handle packet processing
 def packet_handler(packet):
     # Ignore Control frames and focus on Beacon, Probe Response, and Data frames
     if packet.type == 1:  # Type 1 = Control frame
-        if debug_mode:
-            print("Ignoring Control frame.")
         return
-
-    # Debugging output to confirm packet capture type
-    if debug_mode:
-        frame_type = "Management" if packet.type == 0 else "Data" if packet.type == 2 else "Unknown"
-        print(f"Captured {frame_type} frame: {packet.summary()}")
 
     # Check for Beacon and Probe Response frames (to get SSIDs)
     if packet.haslayer(Dot11Beacon) or packet.haslayer(Dot11ProbeResp):
@@ -83,8 +60,6 @@ def packet_handler(packet):
         bssid = packet[Dot11].addr2
         # Signal strength
         signal = packet.dBm_AntSignal if hasattr(packet, 'dBm_AntSignal') else 'N/A'
-        if debug_mode:
-            print(f"Detected SSID: {ssid}, BSSID: {bssid}, Signal: {signal}")
         bssid_ssid_map[bssid] = ssid
         bssid_signal_strength[bssid] = signal
 
@@ -117,8 +92,6 @@ def packet_handler(packet):
         # Map client to SSID using BSSID
         ssid = bssid_ssid_map.get(bssid)
         if ssid:
-            if debug_mode:
-                print(f"Associating client {client_mac} with SSID {ssid}")
             network_clients[ssid].add(client_mac)
 
 # Function to stop sniffing
@@ -126,24 +99,12 @@ def stop_sniffing(signum, frame):
     global sniffing
     sniffing = False
     print("\nStopping scan...")
-    logging.info("Stopping scan...")
 
 def display_results():
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    if not debug_mode:
-        logging.info(f"Results at {timestamp}:")
-    print("\n{:<30} {:<15} {:<15}".format('SSID', 'Clients', 'Signal(dBm)'))
-    print("-" * 60)
+    print("\nCurrent Results:")
     for ssid, clients in network_clients.items():
-        # Find BSSIDs corresponding to the SSID
-        bssids = [bssid for bssid, s in bssid_ssid_map.items() if s == ssid]
-        # Get the signal strength for the first BSSID found
-        signal_strength = bssid_signal_strength.get(bssids[0], 'N/A') if bssids else 'N/A'
-        print("{:<30} {:<15} {:<15}".format(ssid, len(clients), signal_strength))
-        # Log each SSID and client count
-        if not debug_mode:
-            logging.info(f"SSID: {ssid}, Clients: {len(clients)}, Signal(dBm): {signal_strength}")
-    print("\nPress Ctrl+C to stop the scan.\n")
+        signal_strength = bssid_signal_strength.get(next(iter(clients), None), 'N/A')
+        print(f"SSID: {ssid}, Clients: {len(clients)}, Signal: {signal_strength}")
 
 def main():
     parser = argparse.ArgumentParser(description="WiFi Scanner to count clients per SSID.")
@@ -155,14 +116,10 @@ def main():
     global debug_mode
     debug_mode = args.debug
 
-    # Setup logging
-    setup_logging()
-
     interface = args.interface
     interval = args.interval
 
     print(f"Starting WiFi scan on interface {interface}. Press Ctrl+C to stop.")
-    logging.info(f"Starting WiFi scan on interface {interface}.")
 
     # Get supported channels from the interface
     get_supported_channels(interface)
@@ -178,9 +135,10 @@ def main():
     sniff_thread = threading.Thread(target=sniff_packets)
     sniff_thread.start()
 
-    # Channel hopping loop
+    # Channel hopping loop with concise output
     while sniffing:
         hop_channel(interface)
+        display_results()  # Update results periodically
 
     sniff_thread.join()
     print("\nFinal Results:")
