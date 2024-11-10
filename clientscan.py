@@ -234,12 +234,28 @@ def passive_scan_for_ssids(interface, sniff_timeout, sniff_count):
         print(f"Total active channels detected: {sorted(active_channels)}")
     return list(active_channels)
 
-# Function to switch WiFi channels in main scan
+# Corrected Function: Function to switch WiFi channels in main scan
 def hop_channel(interface, channels, sleep_time, band_switch_delay):
     previous_band = None  # Keep track of the previous channel's band
     for channel in channels:
         if not sniffing:
             break
+
+        # Determine the current band
+        if 1 <= channel <= 14:
+            current_band = '2.4 GHz'
+        else:
+            current_band = '5 GHz'
+
+        # Check if the band has changed
+        if previous_band and current_band != previous_band:
+            # Band has changed; wait for band_switch_delay before switching
+            if debug_mode:
+                print(f"Band changing from {previous_band} to {current_band}. Waiting for {band_switch_delay} seconds before switching.")
+            time.sleep(band_switch_delay)
+        else:
+            # Band has not changed; wait for regular sleep_time before switching
+            time.sleep(sleep_time)
 
         with channel_lock:
             iface = get_card_with_retries(interface)
@@ -253,23 +269,7 @@ def hop_channel(interface, channels, sleep_time, band_switch_delay):
             if debug_mode:
                 print(f"Set interface {interface} to channel {channel} successfully.")
 
-        # Determine the current band
-        if 1 <= channel <= 14:
-            current_band = '2.4 GHz'
-        else:
-            current_band = '5 GHz'
-
-        # Check if the band has changed
-        if previous_band and current_band != previous_band:
-            # Band has changed; wait for band_switch_delay
-            if debug_mode:
-                print(f"Band changed from {previous_band} to {current_band}. Waiting for {band_switch_delay} seconds.")
-            time.sleep(band_switch_delay)
-        else:
-            # Band has not changed; wait for regular sleep_time
-            time.sleep(sleep_time)
-
-        previous_band = current_band  # Update previous_band
+        previous_band = current_band  # Update previous_band after successful switch
 
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Scanning on Channel {channel}")
 
