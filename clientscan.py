@@ -88,7 +88,7 @@ def set_channel_with_retries(iface, channel, max_retries=5, sleep_time=0.1):
     print(f"Failed to set channel {channel} on interface {interface} after {max_retries} retries")
     return False
 
-# Corrected get_supported_channels function
+# Function to get supported channels
 def get_supported_channels(interface):
     global selected_channels
     try:
@@ -125,10 +125,10 @@ def get_supported_channels(interface):
         sys.exit(1)
 
 # Function to initialize interface in monitor mode
-def set_monitor_mode(interface):
+def set_monitor_mode(interface, getcard_retries):
     try:
         with channel_lock:
-            iface = get_card_with_retries(interface)
+            iface = get_card_with_retries(interface, max_retries=getcard_retries)
             if iface is None:
                 print(f"Failed to get card for interface {interface}. Exiting.")
                 sys.exit(1)
@@ -141,7 +141,7 @@ def set_monitor_mode(interface):
         sys.exit(1)
 
 # Function to perform a quick scan to detect available SSIDs and channels
-def passive_scan_for_ssids(interface, sniff_timeout, sniff_count):
+def passive_scan_for_ssids(interface, sniff_timeout, sniff_count, getcard_retries, setchannel_retries):
     global sniffing
     active_channels = set()
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Scanning for active SSIDs...")
@@ -158,11 +158,11 @@ def passive_scan_for_ssids(interface, sniff_timeout, sniff_count):
 
         # Synchronize access to the interface
         with channel_lock:
-            iface = get_card_with_retries(interface)
+            iface = get_card_with_retries(interface, max_retries=getcard_retries)
             if iface is None:
                 continue  # Skip to the next channel if unable to get card
 
-            success = set_channel_with_retries(iface, channel)
+            success = set_channel_with_retries(iface, channel, max_retries=setchannel_retries)
             if not success:
                 continue  # Skip to next channel
 
@@ -234,8 +234,8 @@ def passive_scan_for_ssids(interface, sniff_timeout, sniff_count):
         print(f"Total active channels detected: {sorted(active_channels)}")
     return list(active_channels)
 
-# Corrected Function: Function to switch WiFi channels in main scan
-def hop_channel(interface, channels, sleep_time, band_switch_delay):
+# Function to switch WiFi channels in main scan
+def hop_channel(interface, channels, sleep_time, band_switch_delay, getcard_retries, setchannel_retries):
     previous_band = None  # Keep track of the previous channel's band
     for channel in channels:
         if not sniffing:
@@ -258,11 +258,11 @@ def hop_channel(interface, channels, sleep_time, band_switch_delay):
             time.sleep(sleep_time)
 
         with channel_lock:
-            iface = get_card_with_retries(interface)
+            iface = get_card_with_retries(interface, max_retries=getcard_retries)
             if iface is None:
                 continue  # Skip to the next channel if unable to get card
 
-            success = set_channel_with_retries(iface, channel)
+            success = set_channel_with_retries(iface, channel, max_retries=setchannel_retries)
             if not success:
                 continue  # Skip to next channel
 
@@ -387,6 +387,9 @@ def main():
     parser.add_argument('--sniff_count', type=int, default=100, help='Number of packets to capture during passive scan')
     parser.add_argument('--hop_sleep', type=float, default=1.0, help='Sleep time in seconds after hopping to a new channel')
     parser.add_argument('--band_switch_delay', type=float, default=5.0, help='Delay in seconds when switching between 2.4 GHz and 5 GHz bands')
+    # Added retry parameters
+    parser.add_argument('--getcard_retries', type=int, default=5, help='Max retries for getting the wireless card')
+    parser.add_argument('--setchannel_retries', type=int, default=5, help='Max retries for setting the channel')
     args = parser.parse_args()
 
     global debug_mode, sniffing, interface, selected_channels
@@ -399,6 +402,8 @@ def main():
     sniff_count = args.sniff_count
     hop_sleep = args.hop_sleep
     band_switch_delay = args.band_switch_delay
+    getcard_retries = args.getcard_retries  # New
+    setchannel_retries = args.setchannel_retries  # New
 
     # Configure logging to suppress Scapy warnings if debug_mode is off
     if not debug_mode:
@@ -409,7 +414,7 @@ def main():
     print(f"Starting WiFi scan on interface {interface}. Press Ctrl+C to stop.")
 
     # Set interface to monitor mode
-    set_monitor_mode(interface)
+    set_monitor_mode(interface, getcard_retries)
 
     # Get supported channels (dynamically includes 2.4 GHz and 5 GHz)
     get_supported_channels(interface)
@@ -434,13 +439,13 @@ def main():
         while sniffing:
             current_time = time.time()
             if current_time - last_scan_time >= scan_interval:
-                active_channels = passive_scan_for_ssids(interface, sniff_timeout, sniff_count)
+                active_channels = passive_scan_for_ssids(interface, sniff_timeout, sniff_count, getcard_retries, setchannel_retries)
                 last_scan_time = current_time
             if not active_channels:
                 active_channels = selected_channels.copy()  # Fallback to pre-selected channels if none detected
             if debug_mode:
                 print(f"Active channels to scan: {active_channels}")
-            hop_channel(interface, active_channels, hop_sleep, band_switch_delay)
+            hop_channel(interface, active_channels, hop_sleep, band_switch_delay, getcard_retries, setchannel_retries)
             display_results()
             time.sleep(interval)
     except KeyboardInterrupt:
